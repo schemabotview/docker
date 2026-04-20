@@ -1,0 +1,71 @@
+When you type docker run nginx, a chain of at least four distinct processes springs into action before Nginx ever serves a request. Understanding that chain — who talks to whom, what each component owns, and where the boundaries are — is what separates someone who uses Docker from someone who can debug it, secure it, and operate it in production.
+
+The Full Stack.
+
+Here is the complete sequence that happens when you run a container. You type a command in the terminal. The Docker CLI translates it into an HTTP request and sends it to the Docker daemon over a Unix socket. The daemon, called dockerd, receives the request and tells containerd to create the container. containerd spawns a small process called a containerd-shim, which in turn invokes runc. runc makes the actual kernel calls — setting up namespaces and control groups — executes the container's entry point process, and then exits. The container process, say Nginx, is now running as the child of the shim.
+
+The key insight is that dockerd itself no longer runs containers. It delegates to containerd, which delegates to runc. This separation exists so that restarting or upgrading Docker does not kill your running containers.
+
+The Docker Client.
+
+The docker binary you type commands into is just a command-line client. It contains no container logic. Its only job is to translate your commands into HTTP requests and send them to the Docker daemon.
+
+The client communicates over the Docker Engine API — a versioned REST API. Because it is HTTP, anything that can make HTTP requests can drive Docker: the command-line interface, the Docker Desktop graphical interface, the VS Code Docker extension, CI slash CD pipelines, Python's docker SDK, and historically Kubernetes.
+
+The client and daemon do not have to be on the same machine. Setting the DOCKER_HOST environment variable to a remote address points your local docker command at a remote daemon — useful for deploying to a server without opening a separate terminal session.
+
+The Docker Daemon.
+
+The Docker daemon is a long-running background process. On Linux it is managed by systemd as the docker service. It listens for API requests and manages the high-level lifecycle of all Docker objects.
+
+The daemon owns image management — pulling, pushing, building, tagging, and deleting images, and managing the image store on disk. It owns the container lifecycle — creating, starting, stopping, killing, and removing containers. It manages Docker networks, volumes, and the build system. Everything the daemon stores lives under slash var slash lib slash docker by default.
+
+The daemon is configured via a file called daemon.json, typically found at slash etc slash docker slash daemon.json on Linux. Common settings include the storage driver, the default logging driver with log rotation options, and default resource limits.
+
+containerd.
+
+containerd is an industry-standard container runtime that sits between dockerd and the actual container process. Docker donated it to the Cloud Native Computing Foundation in 2017, and it is now the runtime used by Docker, Kubernetes, and most managed Kubernetes services including AWS EKS, Google GKE, and Azure AKS.
+
+The split of responsibilities goes like this. dockerd handles the high-level concerns: image building, networking, volumes, and the public API. containerd handles the mid-level concerns: pulling and storing image layers from registries, unpacking image layers into a container's root filesystem using a snapshot model, creating container metadata, and spawning shim processes. runc handles the low-level concerns: making the actual kernel calls.
+
+The containerd-shim is a tiny process that stays alive even when containerd restarts. It holds the container's standard input and output file descriptors and reports the exit code back when the container stops. This is what allows you to upgrade containerd without killing your running containers.
+
+The OCI Specification and runc.
+
+In 2015, Docker, CoreOS, and others founded the Open Container Initiative to standardise two things. The image specification defines the format of a container image — how layers, manifests, and configuration are structured. The runtime specification defines how a container runtime must create and run a container from a filesystem bundle.
+
+runc is Docker's reference implementation of the OCI runtime spec. It is the actual process that makes the kernel calls.
+
+When given an OCI bundle — a root filesystem plus a configuration file — runc calls the clone system call with namespace flags to create an isolated process tree. It sets up control groups to enforce CPU and memory limits. It applies seccomp and AppArmor profiles for system call filtering. Then it executes the container's entry point process. At that point runc exits. The container process becomes the child of the containerd-shim, and runc is gone.
+
+The OCI standardisation means you can swap runc for other runtimes — gVisor from Google for sandboxed execution, Kata Containers for VM-based isolation, or Firecracker for serverless workloads — while keeping containerd and the rest of the stack identical.
+
+The Docker Socket.
+
+The Docker daemon listens on a Unix domain socket at slash var slash run slash docker.sock by default. The Docker CLI connects to this socket to send API requests. Because the API is plain HTTP over the socket, you can make the exact same calls with curl.
+
+This matters for security. The Docker socket is a root-equivalent privilege boundary. Any process or container that can write to it can start privileged containers, mount the host filesystem into a container, and effectively escape the container to access the host.
+
+This is sometimes used legitimately — CI agents that need to build Docker images inside a container, for example. But it must be understood as granting root on the host. Production workloads should use rootless Docker, or a socket proxy that restricts which API endpoints are accessible.
+
+Docker Desktop on macOS and Windows.
+
+Containers are a Linux kernel feature. macOS and Windows do not have Linux namespaces or control groups natively. Docker Desktop solves this by running a lightweight Linux virtual machine in the background.
+
+On a Mac, Docker Desktop runs a LinuxKit VM — a minimal Alpine-based Linux image — and runs dockerd, containerd, and your containers inside it. The docker command on your Mac tunnels through to the daemon inside the VM. From your terminal it feels seamless.
+
+This VM layer explains a few things you might notice. File mounts are slower on Mac than on Linux because bind mounts have to cross the VM boundary via a virtual filesystem. The special hostname host.docker.internal resolves to your Mac's IP, letting a container reach services on your laptop. And the docker.sock on Mac is a proxy socket — the real socket lives inside the VM.
+
+On Linux, there is no VM. The Docker daemon runs directly on the host kernel, and performance is native.
+
+Summary.
+
+A docker run command triggers a call chain: the CLI sends an API call to dockerd, which tells containerd to create the container, containerd spawns a containerd-shim and invokes runc, runc makes the kernel calls and exits, and the container process runs as the child of the shim.
+
+The Docker client is a thin HTTP client that translates commands into REST API calls. dockerd owns the high-level lifecycle of images, networks, volumes, and builds. containerd owns image storage and the container creation pipeline. runc is the OCI-compliant process that sets up namespaces and cgroups and then exits.
+
+The Docker socket at slash var slash run slash docker.sock is a root-equivalent privilege boundary and must be guarded carefully.
+
+On macOS and Windows, Docker Desktop runs a hidden Linux virtual machine. On Linux, the daemon runs natively on the host kernel.
+
+In the next topic, we'll look at images and layers — how Docker builds layered filesystems and why that design makes image storage so efficient.
