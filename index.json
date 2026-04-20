@@ -1,0 +1,73 @@
+{
+  "sections": [
+    {
+      "title": "Getting Started",
+      "notebooks": [
+        "01-what-is-docker-and-containerization",
+        "02-docker-architecture-and-the-engine",
+        "03-images-and-layers",
+        "04-your-first-container"
+      ]
+    },
+    {
+      "title": "Building Images",
+      "notebooks": [
+        "05-writing-dockerfiles",
+        "06-dockerfile-best-practices",
+        "07-multi-stage-builds"
+      ]
+    },
+    {
+      "title": "Running Containers",
+      "notebooks": [
+        "08-container-lifecycle-and-management",
+        "09-resource-limits-and-constraints"
+      ]
+    },
+    {
+      "title": "Storage",
+      "notebooks": [
+        "10-volumes",
+        "11-bind-mounts-and-tmpfs"
+      ]
+    },
+    {
+      "title": "Networking",
+      "notebooks": [
+        "12-docker-network-types",
+        "13-bridge-and-user-defined-networks",
+        "14-port-mapping-and-container-communication"
+      ]
+    },
+    {
+      "title": "Docker Compose",
+      "notebooks": [
+        "15-compose-overview-and-yaml-syntax",
+        "16-multi-service-stacks",
+        "17-compose-in-development-and-ci-cd"
+      ]
+    },
+    {
+      "title": "Registries & Image Management",
+      "notebooks": [
+        "18-docker-hub-and-image-management",
+        "19-private-registries",
+        "20-image-security-scanning"
+      ]
+    },
+    {
+      "title": "Security",
+      "notebooks": [
+        "21-container-security-fundamentals",
+        "22-non-root-users-and-secrets-management",
+        "23-seccomp-apparmor-and-read-only-filesystems"
+      ]
+    },
+    {
+      "title": "Observability",
+      "notebooks": [
+        "24-health-checks-and-logging"
+      ]
+    }
+  ]
+}
