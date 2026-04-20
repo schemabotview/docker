@@ -1,0 +1,83 @@
+Docker is a platform for packaging and running applications inside containers — lightweight, portable units that bundle your code, runtime, dependencies, and configuration into a single artifact. A container runs the same way on a developer's laptop, a CI server, and a production cloud instance.
+
+In this topic we'll cover the problem Docker was built to solve, what a container actually is under the hood, how containers compare to virtual machines, and how to run your very first container.
+
+The Problem. It Works on My Machine.
+
+Imagine you build a web app on macOS with Python 3.11. It works perfectly. You hand it to a colleague running Ubuntu with Python 3.8 — and it fails immediately. A library version differs, a system dependency is missing, an environment variable isn't set.
+
+This is the "works on my machine" problem, and it has plagued software teams for decades. The environment the app was built in is different from the environment it runs in.
+
+Before containers, teams reached for two solutions. First, setup scripts — shell scripts that install the right versions on any machine. The problem is they drift over time and behave differently across operating systems. Second, virtual machines — you ship a full operating system image with your app baked in. Reliable, but heavyweight. Each virtual machine is gigabytes in size, takes minutes to start, and wastes resources when you need to run many apps on shared hardware.
+
+Docker's answer is to package everything the application needs — code, runtime, libraries, configuration — into one image that runs identically anywhere Docker is installed. You ship the environment, not just the code.
+
+What is a Container.
+
+A container is an isolated process running on the host operating system's kernel, with its own filesystem, network stack, and process namespace — but without the overhead of a full virtual machine.
+
+It achieves this isolation using two Linux kernel features.
+
+The first is namespaces. Namespaces partition kernel resources so each container sees only its own slice of the world. The process ID namespace gives the container its own process tree — process ID 1 inside the container is your application, not the host's init system. The network namespace gives the container its own network interfaces and routing table. The mount namespace gives the container its own filesystem view. The hostname namespace lets the container have its own hostname.
+
+The second is control groups, or cgroups. These enforce resource limits — how much CPU, RAM, and disk I/O a container is allowed to consume.
+
+Together, namespaces give isolation and cgroups give resource control. Docker wraps these kernel primitives in a user-friendly command-line interface and image format. That is the core of what Docker is.
+
+Virtual Machines versus Containers.
+
+Both virtual machines and containers solve the environment problem, but at very different levels of the stack.
+
+A virtual machine carries an entire operating system — its own kernel, init system, and system libraries — for every workload. A container shares the host kernel and only bundles what the application actually needs on top.
+
+Think of a virtual machine as a whole apartment: every tenant gets their own building, their own plumbing, their own electrical system. A container is more like a room in a shared building — isolated from other rooms, but sharing the infrastructure underneath.
+
+In practical terms, virtual machine images are measured in gigabytes; container images are measured in megabytes. Virtual machines take minutes to start; containers start in milliseconds to seconds. You can run tens of virtual machines on a host, but hundreds of containers.
+
+The trade-off is isolation strength. A virtual machine has a fully separate kernel — a vulnerability in one VM cannot easily affect another. Containers share the host kernel, so the isolation boundary is the process and namespace level. Both are used in production — containers often run inside virtual machines to get the hardware isolation of a VM and the density and speed of containers on top.
+
+What is Docker.
+
+Docker is an open-source platform that makes containers easy to build, ship, and run. It was created by Solomon Hykes and released publicly in March 2013 by a company then called dotCloud.
+
+Before Docker, Linux containers existed since 2008 through a technology called LXC. But they were difficult to use — there was no standard image format, no easy way to share containers, and no simple command-line interface. Docker provided four critical things.
+
+First, the Dockerfile — a declarative build script that produces reproducible, version-controlled image builds. Second, a layered image format — efficient storage where shared layers are reused between images. Third, Docker Hub — a public registry where you can share and pull images with a single command. Fourth, a simple CLI where docker run and docker build are all you need to get started.
+
+Docker went from zero to one hundred million downloads in under a year. It fundamentally changed how software is deployed and spawned an entire ecosystem — Kubernetes, container registries, CI slash CD pipelines — that is now the backbone of modern cloud infrastructure.
+
+Docker Architecture.
+
+Docker uses a client-server architecture. The command-line interface you type commands into is the client. The heavy lifting is done by a background service called the Docker daemon, or dockerd.
+
+When you run docker run or docker build, the client sends a request to the daemon over a local socket. The daemon manages images, containers, networks, and volumes. Underneath the daemon sits containerd — the low-level runtime that actually creates and runs containers using kernel namespaces and cgroups. Docker donated containerd to the Cloud Native Computing Foundation in 2017, and it now powers many container platforms beyond Docker itself.
+
+Images are stored in a registry. Docker Hub at hub.docker.com is the default public registry. It hosts official images for Python, Node, Nginx, Postgres, and thousands more. Organizations can also run private registries using AWS ECR, Google Container Registry, or self-hosted solutions like Harbor.
+
+Core Concepts.
+
+Four terms appear constantly in Docker. Understanding how they relate is the foundation for everything else.
+
+An image is a read-only template that defines what is inside a container — the filesystem, environment variables, default command, and metadata. Think of it like a class in object-oriented programming: the blueprint, not the running thing. Images are built in layers. Each instruction in a Dockerfile adds a layer. Layers are cached and shared — if two images both use ubuntu 22.04 as a base, they share those layers on disk.
+
+A container is a running instance of an image — the class brought to life as an object. You can run many containers from the same image simultaneously. Each gets its own isolated filesystem, network, and process namespace, but they all start from the same immutable image.
+
+A Dockerfile is a plain-text recipe for building an image. Each line is an instruction: FROM sets the base image, RUN executes a command during the build, COPY brings files in from the host, and CMD sets the default command when a container starts.
+
+A registry is a storage and distribution system for images. You push to upload an image and pull to download one.
+
+Summary.
+
+The "works on my machine" problem arises when the build and runtime environments differ. Docker solves this by packaging the environment itself alongside the application.
+
+A container is an isolated process on the host kernel, using Linux namespaces for isolation and cgroups for resource limits — no guest operating system required.
+
+Containers are lighter than virtual machines: they share the host kernel, start in milliseconds, and are measured in megabytes rather than gigabytes.
+
+Docker, released in 2013, made containers practical by adding a layered image format, the Dockerfile, Docker Hub, and a simple command-line interface.
+
+Docker's architecture is a client that sends commands to a daemon, which uses containerd to actually run containers. Images are stored in and distributed from registries.
+
+The four core concepts are image — the blueprint, container — the running instance, Dockerfile — the build recipe, and registry — the image store.
+
+In the next topic, we'll go deeper into Docker Architecture — how the daemon, containerd, and the OCI runtime specification fit together under the hood.
