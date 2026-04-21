@@ -1,0 +1,65 @@
+The previous topics covered what Docker is and how it works internally. Now we use it. The docker run command is where everything comes together — and it has enough flags and behaviours that it deserves a focused look.
+
+The docker run Command.
+
+docker run is actually shorthand for three separate operations. First, it pulls the image from a registry if you do not have it locally. Second, it creates the container — allocating the container metadata and a writable filesystem layer. Third, it starts the container — executing the entry point process.
+
+Most of the time you use docker run directly and all three happen in one step. The lower-level docker create followed by docker start split is useful when you need to configure something before the process starts.
+
+The most important flags to know are these. The interactive and tty flags, written as dash-i-t, keep standard input open and allocate a pseudo-terminal — you use this for interactive shells. The detach flag, dash-d, runs the container in the background and prints the container ID so your prompt returns immediately. The name flag gives the container a human-readable name. The publish flag, dash-p, maps a host port to a container port. The env flag, dash-e, sets an environment variable inside the container. The remove flag, double-dash-rm, automatically deletes the container when it exits. The volume flag, dash-v, mounts a host path or named volume into the container. And the memory flag limits how much RAM the container can use.
+
+Interactive versus Detached Mode.
+
+Use the interactive and tty flags together when you want a shell or REPL inside the container and your terminal stays attached. When you run docker run dash-i-t ubuntu bash, you get a bash prompt inside the container. Pressing Control-D or typing exit leaves the shell and the container stops because the shell was the main process.
+
+Use the detach flag for long-running services like web servers and databases. The container runs in the background and you get the container ID printed. Your prompt returns immediately so you can keep working.
+
+Add the remove flag to have the container deleted automatically when it exits. This is ideal for one-shot tasks: run a command, get the output, container is gone. There is no stopped container left behind to clean up.
+
+Naming and Identifying Containers.
+
+Every container gets a unique ID — a sixty-four character hex string — at creation time. Docker also assigns a random human-readable name like hopeful-lovelace if you do not provide one.
+
+Use the name flag to assign a meaningful name you can reference in scripts and other commands. Instead of referring to a long hex ID, you can write docker logs webserver or docker stop webserver. Names must be unique among all containers, including stopped ones. If you try to reuse a name without removing the old container first, Docker will return an error.
+
+Port Mapping.
+
+A container runs in its own network namespace. Its ports are not reachable from the host unless you explicitly map them. The publish flag takes two port numbers separated by a colon: the host port on the left, the container port on the right.
+
+For example, dash-p 8080 colon 80 means that requests arriving at port 8080 on your host machine are forwarded to port 80 inside the container. Without this mapping, the container's Nginx or web app is completely unreachable from your browser.
+
+You can bind only on localhost by writing the IP address before the host port — this prevents other machines on your network from reaching the service. You can let Docker choose a random available host port by omitting the host port number. And you can use the capital-P flag to automatically map all ports declared in the image with EXPOSE to random host ports.
+
+Environment Variables.
+
+Environment variables are the standard way to configure containers at runtime — database connection strings, API keys, feature flags, log levels.
+
+Use the env flag with a key-equals-value argument to set a single variable. Repeat the flag for multiple variables. If you write just the variable name without a value, Docker passes through the current value from your host shell — useful for secrets that are already in your environment. For larger sets of variables, use the env-file flag pointing to a plain text file with one key-equals-value entry per line.
+
+An important security note: environment variables passed via the env flag appear in the output of docker inspect, which anyone with Docker socket access can read. For production secrets, use Docker secrets, a secrets manager, or at minimum an env file that is excluded from version control.
+
+The Container Lifecycle.
+
+A container moves through a defined set of states. It begins as created — the container metadata and writable layer exist but the process has not started. Docker start moves it to running, where the entry point process is executing. The container becomes exited either when its main process exits on its own or when you run docker stop or docker kill. A stopped container still exists — you can docker start it again, which brings it back to running. When you run docker rm, the container and its writable layer are permanently deleted.
+
+The distinction between docker stop and docker kill matters in production. docker stop sends the SIGTERM signal first, giving the process time to flush buffers, close connections, and shut down gracefully. After ten seconds, if the process has not exited, Docker sends SIGKILL to force-terminate it. docker kill sends SIGKILL immediately with no grace period. For databases, web servers, and any service that handles in-flight requests, always prefer docker stop.
+
+docker pause and docker unpause are less commonly used but worth knowing. Pause freezes all processes in the container by sending a SIGSTOP to the entire cgroup. Unpause resumes them. The container does not exit — it just stops executing until you unpause it.
+
+Exec, Logs, and Copy.
+
+docker exec lets you run an additional command inside an already-running container. The most common use is opening an interactive shell for debugging: docker exec dash-i-t followed by the container name and the shell command. You can also run non-interactive commands: ask nginx to validate its config, read a file, or check an environment variable. When you exit from an exec session, the container keeps running — only the exec process exits, not the container's main process.
+
+docker logs shows everything the container has written to standard output and standard error since it started. Use the follow flag to stream live output as new lines arrive, just like tail -f. Use the tail flag to limit how many lines to show. Use the since flag with a duration like 5m or a timestamp to see only recent output.
+
+docker cp copies files between your host filesystem and a container's filesystem, in either direction. It works on both running and stopped containers, which makes it useful for recovering files from a crashed container. For regular, ongoing file sharing between a container and the host, bind mounts are the right tool — docker cp is for one-off transfers during development and debugging.
+
+Summary.
+
+docker run is shorthand for pull, create, and start combined. The flags you will use most often are dash-i-t for interactive sessions, dash-d for background services, double-dash-rm for one-shot tasks, double-dash-name for a human-readable handle, dash-p for port mapping, and dash-e for environment variables.
+
+Stopped containers still exist and can be restarted until you explicitly run docker rm. Use docker stop for graceful shutdown via SIGTERM, and docker kill only when you need to force-terminate immediately.
+
+docker exec runs an additional process inside a running container without affecting the main process. docker logs captures all standard output and standard error. docker cp moves individual files between host and container in either direction.
+
+In the next topic, we will go deeper into writing Dockerfiles — how to build your own images from scratch, and the instructions that give you full control over the image you produce.

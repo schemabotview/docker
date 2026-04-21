@@ -1,0 +1,81 @@
+A Docker image is not a monolithic file you copy around. It is a stack of read-only layers, each representing a change to the filesystem — and that layered design is why Docker images are so fast to build, so efficient to store, and so cheap to share between machines.
+
+What is a Docker Image.
+
+A Docker image is a read-only, ordered stack of filesystem layers plus a small JSON config that records metadata: environment variables, working directory, default command, exposed ports, and the layer order.
+
+It is not a single file like a virtual machine disk image. On disk, each layer is stored independently as a compressed archive of filesystem changes. Docker composes them into one coherent filesystem at runtime using a union filesystem.
+
+The analogy that fits best is a Git history. Just as each Git commit records only the diff — what changed — each image layer records only the filesystem changes made by one build instruction. Just as two branches can share a common ancestor commit, two images can share base layers, stored only once on disk. And just as a commit is identified by a SHA-256 hash, each layer is identified by a SHA-256 digest.
+
+When you pull python 3.12 slim, Docker downloads each layer separately, checks its digest, and stores it once — even if ten different images on your machine share that same base layer.
+
+How Layers Are Built.
+
+Every instruction in a Dockerfile that modifies the filesystem creates a new layer. Instructions that only set metadata — like ENV, EXPOSE, LABEL, CMD, and ENTRYPOINT — create zero-size metadata layers.
+
+Consider a simple Dockerfile. The FROM instruction unpacks the base image as the first layer. A RUN instruction that runs apt-get install creates a second layer containing all the filesystem changes from that installation. A COPY instruction that copies your application file creates a third layer containing just that file. The result is a stack of three filesystem layers, each holding only what changed at that step.
+
+Layer caching is the key performance feature. When Docker builds an image, it hashes the instruction and its inputs. If the hash matches a cached layer, Docker reuses it instantly — no re-execution. This is why instruction order in a Dockerfile matters so much. Put rarely-changing instructions early — like installing system packages — and frequently-changing instructions late — like copying your source code. This way, the cache stays valid for the expensive steps as long as possible.
+
+The overlay2 Storage Driver.
+
+Docker needs a way to present multiple read-only layers as a single coherent filesystem to a running container. The default mechanism on Linux is the overlay2 storage driver, which uses the Linux kernel's OverlayFS.
+
+OverlayFS merges two directory trees. The lowerdir holds the image layers, which are read-only and stacked on top of each other. The upperdir is the container's writable layer — this is where any writes go. An internal workdir is used by OverlayFS as scratch space. The merged view is what the container actually sees: one unified filesystem that combines all of the above.
+
+From inside the container, the filesystem looks completely normal. You can read any file from any image layer. When you write or modify a file, it is placed in the upperdir — the image layers beneath are never touched. On disk, the layers live under slash var slash lib slash docker slash overlay2 on Linux, each as a directory containing only the files that changed in that layer.
+
+Copy-on-Write.
+
+Copy-on-Write is the mechanism that lets hundreds of containers share the same image layers without interfering with each other.
+
+When a container process reads a file that exists in a lower image layer, it reads it directly — no copying needed, no extra disk usage. When a container process writes to or modifies a file that exists in a lower layer, OverlayFS first copies that file up into the container's writable layer. The write is then applied to that copy. On the next read, the container sees the modified copy — the original in the image layer is unchanged.
+
+The efficiency gain is dramatic. Imagine one hundred containers all sharing the same nginx alpine image, which is about twenty-five megabytes. With copy-on-write, those image layers are stored just once on disk — twenty-five megabytes total. Without it, you would need a full copy per container, which would be two and a half gigabytes.
+
+One critical thing to understand: the container's writable layer is ephemeral. It exists only as long as the container exists. When you remove a container, its writable layer is deleted. Any files written inside the container are gone. If you want data to survive past a container's lifetime, you need to use a volume or a bind mount — topics we will cover later.
+
+Image Manifest and Content-Addressable Storage.
+
+When Docker pulls an image from a registry, it downloads two types of artifact.
+
+The manifest is a JSON document that lists the layers that make up the image and references the image config. Each layer is referenced by its SHA-256 digest and size.
+
+The config is a JSON document that records the image's metadata: environment variables, working directory, exposed ports, the command to run, and the full layer history used to build the image.
+
+Everything is stored by its SHA-256 digest — this is content-addressable storage. If two images share a layer with the same digest, they share the exact same bytes on disk. Docker never downloads a layer it already has, regardless of which image it belongs to.
+
+There is also a manifest list, sometimes called a multi-platform manifest, which sits above individual manifests. It points to different image manifests for different CPU architectures — amd64 for Intel and AMD machines, arm64 for Apple Silicon and AWS Graviton, and others. When you docker pull ubuntu, Docker automatically selects the manifest for your machine's architecture without you having to think about it.
+
+Tags and Digests.
+
+Images are referred to using the pattern: optional registry, optional namespace, repository name, optional tag, and optional digest.
+
+When you just write nginx, Docker fills in the defaults: docker.io slash library slash nginx colon latest. Writing nginx colon 1.25 pins to a specific tag. Writing nginx followed by an at sign and a SHA-256 hash is a digest reference — completely immutable.
+
+Tags are mutable. When you pull python 3.12 slim today and again in three months, you may get different bytes — the tag has been updated by the Python maintainers with security patches. This is desirable for staying current, but it means builds are not automatically reproducible across time.
+
+Digests are immutable. A digest reference will always refer to exactly that version of the image, forever. CI slash CD pipelines that need reproducible builds pin to digests.
+
+For tag naming conventions, avoid latest in production — it is completely unpredictable. A major version tag like node 20 accepts minor and patch updates automatically. A full version tag like node 20.11.1 is predictable and updated explicitly. Slim and Alpine variants give smaller images with fewer pre-installed tools. Digest pinning gives fully reproducible builds.
+
+Summary.
+
+A Docker image is a read-only stack of filesystem layers plus a JSON config — not a monolithic file.
+
+Each Dockerfile instruction that modifies the filesystem creates a new layer containing only the diff. Metadata instructions create zero-size layers.
+
+Layer caching reuses unchanged layers at build time. Keep infrequently-changing instructions early in the Dockerfile to maximise cache hits.
+
+The overlay2 storage driver uses Linux OverlayFS to merge read-only image layers into a single filesystem view, plus a writable container layer on top.
+
+Copy-on-Write means reads come directly from shared image layers, and writes copy the file into the container's writable layer first — image layers are never modified.
+
+The container's writable layer is ephemeral and disappears when the container is removed. Use volumes for persistent data.
+
+Layers are stored by SHA-256 digest. Shared layers are stored once on disk and never re-downloaded.
+
+Tags are mutable. Digests are immutable. Pin to digests for reproducible production builds.
+
+In the next topic, we will run your first containers and explore the docker run command in depth — flags, port mapping, environment variables, and the container lifecycle.
