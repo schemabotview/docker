@@ -1,0 +1,64 @@
+This notebook goes deep on the network driver you will use every day: the user-defined bridge. It covers subnet configuration, Docker's embedded DNS, network aliases, connecting and disconnecting containers at runtime, internal networks, and the isolation patterns that underpin real multi-container architectures.
+
+Creating Bridge Networks.
+
+You create a user-defined bridge with docker network create followed by a name. With no options, Docker picks a subnet automatically from the 172 dot x dot zero dot zero slash 16 range. You can override the subnet with --subnet in CIDR notation, set a specific gateway IP with --gateway, and restrict the range Docker uses for container IPs within the subnet using --ip-range. You can add labels for metadata and use --internal to create a network with no outbound routing.
+
+Docker's Embedded DNS Server.
+
+Every user-defined bridge network has an embedded DNS server running at 127.0.0.11. Containers on the network have this address configured as their nameserver automatically — Docker writes it into /etc/resolv.conf inside the container. You never need to configure it.
+
+When a container queries a hostname, Docker DNS checks whether it matches a container name on the same network. If it does, it returns that container's IP address on the network. If it doesn't, it checks for a matching network alias. If that also doesn't match, it forwards the query to the host's DNS resolver for external names.
+
+This is why user-defined bridges are so powerful for microservices. A frontend container can reach a backend container simply by using the backend's container name as the hostname. If the backend container is replaced — even at a different IP — the DNS record updates automatically and the frontend continues to work without any reconfiguration.
+
+Network Aliases.
+
+A network alias is an additional hostname for a container on a specific network. You set it with --network-alias at docker run time or with the --alias flag on docker network connect. The container remains reachable by both its container name and the alias.
+
+The powerful feature is that multiple containers can share the same alias. When more than one container has the same alias, Docker DNS returns all their IP addresses as multiple A records. Clients that query the alias get a round-robin selection of IPs, distributing requests across all containers with that alias.
+
+This enables blue-green deployments: your old version and new version both have the same alias. You start the new version with the alias, verify it is healthy, then remove the old version. Consumers use the alias and see no interruption. It also enables simple load distribution across multiple instances of the same service without an external load balancer.
+
+Using aliases instead of container names for inter-service communication is a better practice in general. Consumer services depend on the alias, not on a specific container name. You can rename or replace the underlying container without touching consumer configuration.
+
+Connecting and Disconnecting at Runtime.
+
+You can attach a running container to an additional network with docker network connect, and detach it with docker network disconnect. Both operations take effect immediately — no restart required. When a container is connected to multiple networks, it has a separate IP address on each network.
+
+This is how you implement the API service that bridges two network tiers: start the container on one network, then connect it to the second network. The container becomes reachable from both.
+
+Static IP Assignment.
+
+You can pin a container to a specific IP within a network's subnet using the --ip flag. This requires a user-defined network with an explicit subnet — it cannot be done on the default bridge. The IP must be within the network's subnet and not already assigned to another container.
+
+Static IPs are useful in narrow circumstances — typically when integrating with external systems that expect a fixed IP address, such as legacy firewall rules or hardcoded configuration in systems you don't control. In most situations, using container names or network aliases is the right solution because they continue to work after container restarts even when the IP changes.
+
+Internal Networks.
+
+Adding the --internal flag when creating a network produces a network with no gateway to the outside world. Containers on an internal network can communicate freely with each other by name, but they cannot initiate connections to the internet or to the host. Docker configures no outbound routing for the network.
+
+This is a strong isolation primitive. Even if a container on an internal network is compromised, the attacker cannot make outbound connections to exfiltrate data or download additional tools. Internal networks are ideal for databases, caches, and any backend service that should never be able to initiate external connections.
+
+Network-Based Service Isolation Patterns.
+
+In a real multi-service application, you use multiple networks to enforce that each tier of the architecture can only reach the tiers it legitimately needs to talk to.
+
+A typical web application might have a frontend network and an internal backend network. The reverse proxy is on the frontend network and publishes a port to the host. The API service is on both networks — it receives requests from the proxy via the frontend network and reaches the database via the backend network. The database is on the backend network only. Because the backend network is internal, the database cannot make outbound connections, and the proxy cannot reach the database directly because they share no network.
+
+This pattern means that even if the proxy is compromised, the attacker cannot directly access the database. They would need to first compromise the API service. Each hop requires breaking a separate container, and the internal network prevents the database from being used as a launch point for outbound attacks.
+
+Connecting the API service to both networks is done with docker network connect after the container is running, or by specifying --network at run time and then connecting to the second network immediately after.
+
+Summary.
+
+User-defined bridge networks are the right default for multi-container applications. Create one per logical group of services.
+
+Docker's embedded DNS server at 127.0.0.11 resolves container names and aliases automatically on every user-defined network. No configuration needed.
+
+Network aliases let multiple containers share a hostname and enable round-robin DNS, blue-green deployments, and load distribution. docker network connect and docker network disconnect attach and detach running containers with immediate effect.
+
+Use static IPs only when integrating with external systems that require fixed addresses. Use --internal networks for databases and backend services that should never make outbound connections.
+
+Build multi-tier applications by putting each tier on a separate network and connecting bridge services to both networks. Databases stay on internal networks and are never directly reachable from the internet or the proxy tier.
+
