@@ -1,0 +1,80 @@
+This notebook goes deeper into the container lifecycle — restart policies, signals and graceful shutdown, real-time monitoring, bulk cleanup, and managing containers at scale.
+
+The Full Lifecycle State Machine.
+
+A container moves through well-defined states. Understanding the transitions tells you which commands apply at each stage.
+
+A container starts in the created state — the filesystem and writable layer are allocated but the process has not yet started. Once you start it, it moves to running, meaning PID 1 is executing. From running you can pause the container, which freezes all its processes without stopping them — equivalent to sending SIGSTOP to the entire cgroup. Unpausing resumes execution. Sending a stop or kill command, or having the process exit on its own, moves the container to exited. From exited you can start it again, or remove it entirely with docker rm.
+
+A critical insight: an exited container still occupies disk space — its writable layer and logs persist until you explicitly remove it. Running containers without the --rm flag and never cleaning up means you accumulate stopped containers indefinitely.
+
+Signals and Graceful Shutdown.
+
+When you run docker stop, Docker does not immediately kill the container. It sends a signal and waits. The default signal is SIGTERM — a polite request to shut down gracefully. Docker waits up to ten seconds by default. If the container is still running after the timeout, it sends SIGKILL, which is a forced termination with no grace period.
+
+A well-behaved web server that receives SIGTERM should stop accepting new connections, finish handling in-flight requests, flush logs and close file handles, and then exit cleanly.
+
+This graceful shutdown mechanism only works correctly if your application is PID 1 inside the container. If you use shell form CMD — writing the command as plain text rather than a jay-son array — the shell process becomes PID 1. The shell receives SIGTERM but does not forward it to your application. Your app never gets the signal and gets killed after the timeout regardless.
+
+Always use exec form for CMD and ENTRYPOINT to ensure your process is PID 1 and receives signals directly.
+
+You can configure which signal Docker sends using the STOPSIGNAL instruction in the Dockerfile. Nginx, for example, expects SIGQUIT for a graceful connection drain rather than SIGTERM. You can also send an arbitrary signal at runtime with docker kill --signal, which is useful for sending SIGHUP to reload configuration without restarting the process.
+
+The timeout for docker stop can be changed per-command with the --time flag. docker kill skips the grace period entirely and sends SIGKILL immediately.
+
+Restart Policies.
+
+A restart policy tells Docker what to do when a container's PID 1 exits. There are four options.
+
+The default is no — Docker never automatically restarts the container.
+
+on-failure restarts the container only if the process exits with a non-zero exit code. A clean exit with code zero is not restarted. You can cap the number of retries by appending a colon and a number — for example on-failure colon 5 means Docker gives up after five consecutive failures.
+
+always restarts the container regardless of the exit code. It also restarts when the Docker daemon itself starts, which means the container survives host reboots automatically.
+
+unless-stopped behaves like always except it does not restart if the container was manually stopped before the daemon restarted. This respects human intervention: if you explicitly run docker stop, the container stays stopped even after a host reboot.
+
+The practical guidance is: use unless-stopped or always for production long-running services, on-failure with a max count for workers that might legitimately fail, and no for one-shot tasks.
+
+docker update.
+
+docker update lets you change certain container settings without stopping and recreating the container. You can update the restart policy, memory limits, and CPU limits on a running container. This is useful for responding to production load changes without a deployment. Changes that require recreating the container — port mappings, environment variables, volume mounts, the image itself — cannot be updated this way.
+
+Real-Time Monitoring with docker stats.
+
+docker stats streams live resource usage metrics for all running containers. It shows CPU percentage, current memory usage versus the memory limit, memory percentage, network bytes sent and received, block device bytes read and written, and the number of processes. The --no-stream flag prints one snapshot and exits, which is useful in scripts and notebooks where a live stream would block indefinitely.
+
+docker events.
+
+docker events streams real-time events from the Docker daemon — container lifecycle events, image pulls, network connections and disconnections, volume operations. You can filter by event type, by container name, by time range. Common container events are create, start, stop, kill, die, destroy, pause, and unpause. This stream is valuable for debugging unexpected container restarts, auditing what happened on a host, and building automation that reacts to container state changes.
+
+Filtering docker ps.
+
+On hosts running many containers, filtering and custom formatting make docker ps useful. You can filter by status — running or exited — by container name, by label, or by ancestor image. The -q flag returns only IDs, which you can pipe into other commands. For example, passing the output of docker ps -q --filter status=exited to docker rm removes all stopped containers in one line.
+
+The --format flag takes a Go template string that selects and arranges specific columns. This is more predictable than parsing the default tabular output in scripts.
+
+Cleanup.
+
+Docker accumulates disk usage over time: stopped containers, unused images, orphaned volumes, and build cache. docker container prune removes all stopped containers. docker image prune removes dangling images — untagged images not referenced by any container. Adding the -a flag removes all unused images, not just dangling ones. docker volume prune and docker network prune clean up their respective object types. docker builder prune removes build cache.
+
+docker system prune is the combined command. It removes stopped containers, dangling images, unused networks, and build cache in one go. Adding -v also removes unused volumes, and adding -a removes all unused images. Check what would be freed before running it using docker system df, which shows a per-type breakdown of disk usage.
+
+Labels and Naming.
+
+Labels let you attach arbitrary key-value metadata to containers — then filter, manage, and monitor by it. The recommended convention is to use a reverse-dns prefix for your label keys to avoid clashes with Docker's own labels. Labels can be set in the Dockerfile, where they apply to every container run from that image, or passed at docker run time with the --label flag.
+
+Descriptive container names combined with labels make a host manageable. You can stop all production web containers with a single docker stop command filtered by label, or find all containers from a specific team or service in an instant.
+
+Summary.
+
+Container states progress from created through running to exited. Exited containers persist on disk until removed.
+
+docker stop sends SIGTERM and waits before SIGKILL. Use exec form CMD so your process is PID 1. Configure custom stop signals with STOPSIGNAL.
+
+Restart policies: no is the default, on-failure restarts on non-zero exit, always restarts unconditionally and survives reboots, unless-stopped is like always but respects manual stops.
+
+docker update changes restart policy and resource limits without recreating the container. docker stats gives real-time resource metrics. docker events streams daemon lifecycle events. Filter docker ps with --filter and --format for scripting.
+
+Clean up with docker container prune, docker image prune, and docker system prune. Check usage first with docker system df. Use labels with a reverse-dns namespace to make containers queryable and manageable at scale.
+
