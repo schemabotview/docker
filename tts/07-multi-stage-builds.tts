@@ -1,0 +1,60 @@
+Multi-stage builds solve a fundamental tension in Dockerfiles: the tools you need to build an application are not the tools you need to run it. Compilers, build systems, test runners, and development dependencies are needed during the build but add size and attack surface to the final image.
+
+Before multi-stage builds existed, teams maintained separate builder and runtime Dockerfiles and used shell scripts to extract artifacts between them. Multi-stage builds collapse this into a single Dockerfile.
+
+The Problem.
+
+Consider building a Go binary. The Go toolchain image is around 800 megabytes. Your compiled binary might be 15 megabytes. In the naive approach you ship 785 megabytes of build tooling that serves no purpose at runtime — and every tool in that image is a potential vulnerability. The ideal final image contains only the compiled binary, the runtime dependencies it actually needs, and nothing else.
+
+How Multi-Stage Builds Work.
+
+A multi-stage Dockerfile has multiple FROM instructions. Each FROM starts a new stage with its own clean filesystem. Stages are numbered starting at zero and can be given human-readable names with the AS keyword.
+
+In a typical Go multi-stage build, the first stage uses the full Go toolchain image, copies the source code, and compiles the binary. The second stage starts fresh from a minimal base image — or even from scratch. A COPY --from instruction copies only the compiled binary from the first stage into the second stage. Docker discards the first stage when building the final image.
+
+The --from flag on COPY can reference a stage by its name, by its numeric index, or by a completely separate image that has nothing to do with the current Dockerfile.
+
+Go Binary to Scratch.
+
+Go produces statically linked binaries that have no dependency on a C library, which means they can run in a scratch image — an image with a completely empty filesystem. This produces the smallest possible images.
+
+When building the Go binary in the build stage, you set CGO underscore ENABLED to zero to produce a fully static binary, and you use the -ldflags flag to strip debug symbols, which reduces the binary size further. In the runtime stage, you start FROM scratch, copy in the binary, and set CMD. The resulting image is just the binary — no shell, no package manager, no operating system overhead.
+
+The absence of a shell is actually a security advantage. An attacker who gains code execution inside the container has no shell to drop into.
+
+Python Multi-Stage.
+
+Python isn't compiled to a native binary, but multi-stage builds still help. Some Python packages require gcc or other build tools to compile C extensions. You install dependencies in a build stage that has the build tools available. You install them into a custom prefix path to keep them isolated from the system Python. Then in the runtime stage, which starts from a clean slim image, you copy only the installed packages from the build stage. The runtime image has no compiler, no build headers, and no temporary build artifacts.
+
+Node.js Multi-Stage.
+
+A common frontend pattern is to use Node.js to compile and bundle JavaScript and CSS assets, then serve those static files with Nginx. The build stage installs all npm dependencies including dev dependencies, runs the build script, and produces a dist folder. The runtime stage starts FROM nginx alpine, copies only the dist folder from the build stage, and that's the entire final image. The Node runtime, npm, and all build tooling are gone. The final image is nginx alpine plus the compiled static files.
+
+Targeting a Specific Stage.
+
+You can stop the build at a named stage using the --target flag. This allows a single Dockerfile to serve multiple purposes.
+
+In a typical setup you have a base stage with shared setup, a dev stage on top of base that adds development tools and runs with hot reload, a test stage that builds on dev and runs the test suite, and a production stage that starts from base and produces a hardened runtime image. In local development you build with --target dev. In ci-cd you build with --target test to validate the code. For deployment you build with --target production. One Dockerfile, three different uses.
+
+Parallel Stages with BuildKit.
+
+When a Dockerfile has multiple independent build stages, BuildKit — Docker's modern build backend — runs them in parallel. If you have a JavaScript frontend builder and a Go backend builder with no dependency between them, BuildKit builds them concurrently. The final stage then copies artifacts from both. This can significantly reduce total build time for complex applications.
+
+BuildKit is the default build backend in Docker Desktop and in Docker Engine 23 and later. Adding the syntax comment at the top of the Dockerfile also activates it explicitly.
+
+COPY from an External Image.
+
+The --from flag on COPY doesn't have to reference a stage in the current Dockerfile. You can copy from any image. This is useful for pulling a single binary or file from an official image without inheriting the full image as a base.
+
+A practical example is adding TLS certificate authority certificates to a scratch-based image. A scratch image has no filesystem at all, including no ca-certificates file. Without a ca-certificates file, any HTTPS request your binary makes will fail with a certificate error. You solve this by copying the ca-certificates file from an alpine image into the scratch stage. The binary then inherits the ca bundle without needing alpine as a base.
+
+Summary.
+
+Multi-stage builds use multiple FROM instructions in one Dockerfile. Each stage has its own filesystem. Only the final stage becomes the image — intermediate stages are discarded and do not add to the image size.
+
+COPY --from copies files from an earlier stage or from any Docker image into the current stage. Name stages with AS for readability. Use --target at build time to stop at a specific stage.
+
+Go to scratch is the gold standard for minimal images. Python and Node still benefit from multi-stage builds: compile extensions or bundle assets in a build stage, copy the results to a clean runtime image.
+
+BuildKit runs independent stages in parallel. COPY --from can reference any image, not just stages in the current Dockerfile — useful for CA certificates, injecting a single tool, or any file you need from an official image without taking a dependency on it.
+
