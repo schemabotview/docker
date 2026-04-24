@@ -1,0 +1,60 @@
+This notebook covers how traffic gets in from the outside world via port mapping and the full picture of how containers communicate — with each other, with the host, and with external services.
+
+How Port Mapping Works.
+
+When you publish a port with -p, Docker adds an iptables rule that performs destination NAT. Traffic arriving at the host on the specified port is rewritten to target the container's IP and port before being forwarded. The Docker daemon manages these rules automatically — you never write them by hand.
+
+The container does not know it is receiving NATted traffic. From the container's perspective, the connection arrives on its own network interface as a normal TCP connection.
+
+Port Mapping Syntax.
+
+The -p flag accepts several forms. The most common is host port colon container port — for example -p 8080:80 maps host port 8080 to container port 80 on all network interfaces.
+
+If you specify only a container port without a host port — for example -p 80 — Docker picks a random available ephemeral port on the host. You then query the assignment with docker port.
+
+If you prefix the host port with an IP address — for example -p 127.0.0.1:8080:80 — Docker binds only on that interface. The container is reachable via loopback from the host itself but not from other machines on the network. This is the right pattern for services that should never be publicly accessible, such as a local admin interface.
+
+You can map UDP ports by appending /udp. You can publish multiple ports by repeating -p. The uppercase -P flag publishes all ports declared in the image's EXPOSE instruction to random host ports.
+
+EXPOSE versus -p.
+
+EXPOSE in a Dockerfile documents which port the application listens on. It creates no iptables rules and makes no port reachable from outside. It is documentation — a signal to operators about which port to map.
+
+The -p flag at docker run time is what actually creates the forwarding rule and makes the port reachable. Without -p, no external traffic reaches the container regardless of what EXPOSE declares.
+
+The -P flag uses EXPOSE to know which ports to map. It reads the image's EXPOSE declarations and maps each one to a random host port. This makes EXPOSE functionally relevant only when -P is used.
+
+A useful mental model: EXPOSE is a README note. -p is the actual wire-up.
+
+Container-to-Container Communication.
+
+Containers on the same user-defined network communicate directly by container name on whatever port the destination container listens on. No port mapping is needed. The traffic stays within the Docker bridge and never reaches the host's public network interface.
+
+This is the correct pattern for internal service communication. Your API container connects to your database container using the database's container name as the hostname and the database's native port — for example postgres colon 5432. The database port is never published to the host with -p, which means it is only reachable from other containers on the same network. This is the right security posture: internal services should not be externally reachable.
+
+Containers on different networks cannot reach each other by default. If you need two containers on different networks to communicate, connect one of them to the other's network using docker network connect.
+
+Container to Host Communication.
+
+Sometimes a container needs to reach a service running directly on the host — a database or API server running outside Docker during development.
+
+Docker Desktop on macOS and Windows automatically provides the DNS name host.docker.internal, which resolves to the host machine's IP from inside any container. You use this hostname to connect from a container to any service listening on the host.
+
+On Linux with Docker Engine, host.docker.internal is not set up automatically. You add it manually with the --add-host flag, passing the special keyword host-gateway as the value. Docker resolves host-gateway to the host's bridge gateway IP at run time.
+
+Host to Container Without Port Mapping.
+
+On Linux, the host has a network route to the Docker bridge subnet — typically 172.17.0.0/16 via the docker zero interface. This means the host can connect directly to any container's IP address even without a port mapping. You get the container's IP from docker inspect, then connect using that IP and the container's port.
+
+This direct access is useful for debugging without exposing a port to the network. On macOS and Windows, this does not work because Docker runs inside a virtual machine. The container IPs are inside the VM and are not directly routable from the host machine. Port mapping is required for host-to-container access on those platforms.
+
+The docker port Command.
+
+docker port followed by a container name lists all active port mappings for that container. Appending a container port number queries the specific mapping for that port. This is how you find out which random host port was assigned when you used -p without specifying a host port.
+
+Communication Summary.
+
+Containers on the same user-defined network reach each other by name on internal ports — no port mapping needed. External traffic reaches containers through -p port mappings on the host. Containers reach the host through host.docker.internal. On Linux, the host reaches containers directly via container IPs through the bridge route. Container outbound traffic to the internet works by default unless the network is marked internal.
+
+EXPOSE documents intent. -p creates the actual forwarding rule. Never publish database or internal service ports to the host — keep them accessible only within the Docker network.
+
