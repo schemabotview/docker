@@ -1,0 +1,66 @@
+A container's writable layer is ephemeral — it vanishes when the container is removed. For anything that needs to outlive a container — database files, user uploads, logs, shared configuration — you need persistent storage. Docker volumes are the recommended solution.
+
+The Problem with the Writable Layer.
+
+Every container has a thin writable layer on top of its image layers. When you remove the container, this layer is deleted and all data written to it is gone. Beyond data loss, the writable layer uses a copy-on-write storage driver which adds overhead for write-heavy workloads, data cannot be shared between containers, and data cannot be easily backed up or migrated when you replace a container with a newer image. Volumes solve all of these problems.
+
+How Volumes Work.
+
+A Docker volume is a directory managed by the Docker daemon. On Linux it is stored on the host at /var/lib/docker/volumes/name/_data. When you mount a volume into a container, Docker bind-mounts that directory into the container's filesystem, bypassing the copy-on-write overlay entirely. Writes go directly to the host filesystem with no additional overhead.
+
+Volumes have an independent lifecycle — they exist until you explicitly delete them, regardless of which containers are using them or whether those containers have been removed.
+
+Named Volumes versus Anonymous Volumes.
+
+A named volume is one you give an explicit name. Docker creates it the first time it is referenced if it doesn't already exist. Named volumes are the recommended approach because you can reference them by name, share them between containers, and manage them explicitly.
+
+An anonymous volume has no name — Docker generates a random UUID identifier. They are created when you use the short -v flag with only a container path and no name, or when a VOLUME instruction in the Dockerfile is triggered without an explicit volume mount at runtime. Anonymous volumes are hard to manage — you can't easily find them, reference them by name, or know which containers created them. They accumulate as orphaned volumes and are cleaned up by docker volume prune. Always prefer named volumes.
+
+Creating and Managing Volumes.
+
+You create a volume with docker volume create followed by a name. You list all volumes with docker volume ls. You inspect a volume with docker volume inspect to see its mount point on the host, the driver, and any labels. You remove a volume with docker volume rm — it must not be in use by any container, running or stopped. Docker volume prune removes all volumes not referenced by any container.
+
+Mounting Volumes.
+
+There are two syntaxes. The short -v syntax takes the form name colon container path. The long --mount syntax is more explicit: you specify type equals volume, source equals the volume name, and target equals the container path. The long form makes the mount type unambiguous. An additional readonly flag or colon ro suffix on the short form creates a read-only mount — the container can read from the volume but any write attempt is blocked by the kernel.
+
+If you provide a source volume name that doesn't exist yet, Docker creates it automatically when the container starts.
+
+Sharing a Volume Between Containers.
+
+Multiple containers can mount the same volume simultaneously. This is how you share data between services — a writer and a reader, a web server and a log shipper, a primary container and a sidecar. One container writes to a file in the volume and another container reads it, with both accessing the same physical data on the host.
+
+Docker does not provide any locking mechanism. If two containers write to the same file concurrently, you can get corrupted data. Coordinate concurrent writes at the application level using a database, a message queue, or explicit file locking.
+
+Pre-Populating a Volume.
+
+When you mount a named volume into a container and the volume is empty, Docker copies the contents of the container's image at that mount path into the volume. This is a one-time initialisation — it only happens on the first use when the volume is empty. On subsequent runs, the volume already has data and Docker does not overwrite it with the image contents.
+
+This behaviour only applies to named volumes, not to bind mounts. If you mount a bind mount pointing to an empty host directory, the container sees an empty directory.
+
+Backing Up and Restoring Volume Data.
+
+The backup pattern is to run a temporary helper container that mounts both the volume you want to back up and a host directory. The helper container runs tar to compress the volume contents and write the archive to the host directory. The archive can then be stored, transferred, or kept as a snapshot.
+
+Restoring works in reverse: create a new empty volume, run a helper container that mounts both the new volume and the backup archive, and extract the archive into the new volume. Any container that subsequently mounts the new volume sees the restored data.
+
+The VOLUME Instruction.
+
+The VOLUME instruction in a Dockerfile declares that a specific path should be externally mounted. If no volume is explicitly provided at docker run time, Docker creates an anonymous volume at that path automatically. Any RUN instruction after VOLUME cannot write to that path — the volume mount overrides the filesystem at that point.
+
+In practice, VOLUME is mainly used in official database images like postgres, mysql, and redis to ensure that if an operator runs the container without mounting a volume, data is at least stored in an anonymous volume rather than the writable layer. When building custom images, you can use VOLUME to document that a path is important, but it is not required — documenting it in the README is equally effective.
+
+Volume Drivers.
+
+The default volume driver is local, which stores data on the host's disk. Docker supports third-party volume drivers that store data on NFS shares, cloud block storage, Azure File Share, and other backends. Volume drivers are how data can persist across host failures in orchestrated environments. Kubernetes uses a similar concept through Persistent Volumes and Storage Classes.
+
+Summary.
+
+A container's writable layer is deleted when the container is removed. Named volumes provide persistent storage managed by Docker that outlives containers.
+
+Use --mount type=volume,source=name,target=/path for clarity, or -v name:/path for brevity. Add readonly for a read-only mount. Multiple containers can share a volume simultaneously — coordinate concurrent writes at the application level.
+
+Mounting an empty named volume at a path that has content in the image seeds the volume with that content on first use. Back up volumes by mounting them into a helper container and running tar. Restore by extracting into a new volume.
+
+The VOLUME instruction declares important paths in official images. Volume drivers allow backends beyond local disk for production persistence across host failures.
+
