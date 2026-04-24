@@ -1,0 +1,71 @@
+Running a single container is simple. Running a full application stack — a reverse proxy, an API, a database, a cache, and optional tooling — requires coordination. This notebook covers the patterns that make multi-service stacks manageable in production and on developer machines.
+
+Compose File Merging.
+
+A single compose.yaml rarely survives contact with multiple environments. Production needs tighter resource limits and no local source mounts. CI needs a test runner service. Development needs debug ports and live reload. Duplicating the whole file for each environment is fragile and hard to maintain.
+
+Compose solves this with file merging. You pass multiple files using the -f flag and Compose merges them in order. Keys in later files override keys in earlier files. Lists like ports, volumes, and environment are merged rather than replaced — items are added on top of what the base file defines.
+
+The pattern is to keep a base compose.yaml that works in any environment, then write small overlay files that contain only the differences. A compose.prod.yaml might tighten the image tag, raise memory limits, and inject a production database password. A compose.ci.yaml might add a test runner service. Neither file is a complete Compose file on its own — they are surgical patches applied on top of the base.
+
+To completely replace a list rather than merge it, Compose version 2.24 and later supports an exclamation reset directive on the key. This is rarely needed but useful when a production overlay must strip out volumes or ports that exist in the base file.
+
+The compose.override.yaml Pattern.
+
+Compose has a special automatic merge behaviour for local development. If a file named compose.override.yaml exists in the same directory as compose.yaml, Compose merges it automatically without any -f flag. This file is meant for developer-specific configuration that should never be committed to version control.
+
+A typical compose.override.yaml builds the image locally instead of pulling it, mounts the source code directory for live reload, adds a debugger port, and exposes the database port to the host so the developer can inspect it with a local client. None of those changes belong in the committed compose.yaml.
+
+The pattern is to add compose.override.yaml and the dot-env file to dot-gitignore, commit compose.yaml and a dot-env.example with placeholder values, and commit environment-specific overlays like compose.prod.yaml and compose.ci.yaml as documentation and reference. Each developer creates their own local override without polluting the shared configuration.
+
+Profiles — Optional Services.
+
+Some services in a stack are not always needed. A database administration UI is useful when debugging but adds noise and resource usage during normal development. A test runner makes no sense as a long-lived service. Compose profiles handle this.
+
+You mark a service as optional by giving it a profiles list in the service definition. Services with no profiles entry are always started. Services with a profiles entry are only started when that profile is explicitly activated with the --profile flag.
+
+A common pattern is a tools profile for UI and inspection services like an admin interface and a mail catcher, and a ci profile for test runner containers that should only run in the continuous integration pipeline. Running docker compose up with no flags starts only the core services. Adding --profile tools starts the optional tooling alongside them.
+
+Scaling Services.
+
+Compose can run multiple instances of the same service using the --scale flag at startup. Specifying --scale api equals three starts three containers from the api service definition, all sharing the same network and any volume mounts defined in the service.
+
+Two constraints apply to scaled services. First, you cannot use container_name — container names must be unique, so Compose generates names automatically when scaling. Second, you cannot use a fixed host port mapping like 8080 to 80. With three instances, three containers would all try to bind the same host port, which fails immediately. The correct approach for scaled services is to put them behind a load balancer — an Nginx container on the same network — and let the load balancer hold the fixed host port while the scaled services are reached through the internal network. Docker's embedded DNS automatically round-robins across all instances sharing a service name.
+
+Init Containers.
+
+Some tasks must complete before the main application can start. Database migrations are the classic example — if the application starts before the schema is created, it crashes. The correct pattern is an init container: a one-shot service that runs to completion before the main service is allowed to start.
+
+You model this with a service that runs the migration command and a depends_on condition of service_completed_successfully on the main application service. Compose holds the main service back until the migration container exits with code zero. If the migration fails and exits with a non-zero code, the main service never starts. Adding restart on-failure to the migration service causes Compose to retry it if it fails transiently — for example, if the database is momentarily unavailable during startup.
+
+The typical chain is: database starts, its healthcheck passes, the migration service starts, runs to completion and exits zero, then the application service starts. Each step is gated on the previous one completing successfully.
+
+Compose Secrets.
+
+Passwords and API keys should not live in environment variables or be baked into images. Compose supports file-based secrets as a more secure alternative. You declare secrets at the top level of the compose file and reference them in service definitions.
+
+Compose mounts each secret as a read-only file inside the container at the path /run/secrets/ followed by the secret name. The file is backed by a tmpfs mount — it lives in memory only and never touches the filesystem or a Docker image layer. The application reads the secret by opening that file path rather than reading an environment variable.
+
+Secret sources can be host files, which Compose reads and mounts into the container, or host environment variables, which Compose reads at startup. Neither approach requires the secret value to appear in the compose file itself.
+
+Multi-Service Patterns.
+
+Beyond basic service definitions, multi-service stacks commonly follow a few architectural patterns.
+
+The sidecar pattern attaches a helper container to a primary service. A log shipper container, for example, mounts the same named volume as the application and reads log files written by the application, forwarding them to a centralised log store. The sidecar has no inbound traffic — it reads from a shared volume and writes outbound. This pattern keeps the application container focused on its core responsibility while the cross-cutting concern of log shipping is handled separately.
+
+The ambassador pattern inserts a proxy container between your service and an external dependency. Rather than connecting directly to a database, the application connects to a PgBouncer or Envoy container on the same internal network. The ambassador handles connection pooling, retries, TLS termination, or protocol translation. The application configuration is simplified — it always talks to the ambassador, never directly to the backing service.
+
+The worker plus queue pattern runs multiple services from the same image with different commands. A web container runs the HTTP server. One or more worker containers run the background job processor against the same message queue. Both containers share the same application code through a common image. Scaling workers independently from the web tier is as simple as increasing the scale count for the worker service.
+
+Summary.
+
+Compose file merging with -f lets you keep environment-specific configuration separate from the base file. Later files override earlier ones, and lists are merged. The compose.override.yaml file is merged automatically without any flags — use it for developer-local configuration that should not be committed.
+
+Profiles mark services as optional. Services without a profile always start. Adding --profile activates the optional services for that profile group.
+
+Scaling with --scale starts multiple instances of a service. Remove container_name and avoid fixed host ports on scaled services. Use a reverse proxy to route traffic across instances.
+
+Init containers use condition service_completed_successfully on depends_on. The main service waits until the init container exits zero before starting.
+
+Compose secrets mount host files as read-only tmpfs at /run/secrets/ inside the container, keeping passwords out of environment variables and image layers.
