@@ -1,0 +1,86 @@
+Running a single container with docker run is manageable. Running five containers — a web server, an API, a database, a cache, and a background worker — with the right networks, volumes, environment variables, and restart policies is not. Docker Compose solves this by letting you define your entire multi-container application in a single YAML file and manage it with one command.
+
+What is Docker Compose.
+
+Docker Compose is a tool for defining and running multi-container applications. You describe the desired state in a YAML file — which containers to run, how they connect, what storage they use — and Compose handles creating, starting, stopping, and removing everything together.
+
+Compose is not an orchestrator. It runs on a single Docker host. For multi-host orchestration you use Docker Swarm or Kubernetes. Compose is for development, testing, and simple single-host production deployments.
+
+The key advantage over raw docker run commands is that a Compose file is declarative and version-controlled. Everyone on the team runs the same stack with one command. The entire application's topology is visible in one file rather than scattered across shell scripts and documentation.
+
+The Compose File.
+
+Compose looks for a file named compose.yaml in the current directory. This is the modern preferred name. The legacy names docker-compose.yaml and docker-compose.yml are also recognised for backwards compatibility. You can specify a different file with the -f flag.
+
+The file has three top-level sections. Services is required and defines the containers. Networks and volumes are optional and define shared resources. A name field at the top sets the project name, which Compose uses as a prefix for all created resources — networks, volumes, and container names. The default project name is the directory name containing the compose file.
+
+Service Configuration.
+
+Each key under services is a service name. The fields inside the service definition map directly to docker run flags.
+
+The image field specifies which image to use. Alternatively, the build field points to a Dockerfile — Compose builds the image automatically when you run docker compose up --build. You can pass build arguments with args under build.
+
+The ports field is a list of host colon container port mappings, the same as -p in docker run. You quote them to prevent YAML from misinterpreting the colon.
+
+The environment field sets environment variables either as a key-value map or as a list. You can reference shell variables or dot-env file values using the dollar-brace syntax. The env_file field loads additional variables from one or more files.
+
+The volumes field lists mount specifications — either named volume references or bind mount paths. Relative paths in bind mounts are resolved relative to the compose file's location, making the file portable across machines.
+
+The networks field lists which networks this service is connected to. If you omit it, the service joins the default network Compose creates for the project.
+
+The restart field sets the restart policy — the same options as docker run: no, always, on-failure, and unless-stopped.
+
+The deploy.resources.limits section sets memory and CPU limits for the service.
+
+The command and entrypoint fields override the image defaults.
+
+depends_on and Health Checks.
+
+The depends_on field controls startup order. By default, Compose starts dependencies before dependants but does not wait for the dependency to be application-ready — only for the container process to start.
+
+For true readiness, combine depends_on with a condition of service_healthy and define a healthcheck on the dependency. The healthcheck runs a command inside the container at a configured interval. Once the healthcheck passes, Compose marks the service as healthy and allows dependants to start.
+
+Three condition values are available: service_started waits only for the container process to begin; service_healthy waits for the healthcheck to pass; and service_completed_successfully waits for a one-shot container to exit with code zero, which is useful for database migration jobs that must complete before the application server starts.
+
+Networks in Compose.
+
+If you define no networks, Compose creates a single default network and connects all services to it. Every service can reach every other service by its service name via Docker's embedded DNS.
+
+For isolation between tiers, declare custom networks and assign services to specific ones. A backend network with internal set to true blocks outbound routing — containers on it can talk to each other but cannot initiate external connections. This is the right setting for database and cache services.
+
+You can also reference networks that were created outside of Compose by marking them as external.
+
+Volumes in Compose.
+
+Named volumes are declared under the volumes top-level key with an empty map as the value. Compose creates them if they don't exist when the stack starts. You reference them in service volume mounts using the volume name. Volumes persist across docker compose down — they are only removed when you add the -v flag to docker compose down.
+
+Variable Substitution and dot-env Files.
+
+Hardcoding passwords and environment-specific values in compose.yaml is bad practice. Compose supports variable substitution using the dollar-brace syntax. You can provide a default value with colon-dash: if the variable is not set, the default is used instead.
+
+Compose automatically loads a dot-env file from the same directory as the compose file. Variables in the dot-env file are available in the compose file's substitution syntax. Shell environment variables take precedence over the dot-env file.
+
+Never commit the dot-env file to version control if it contains real secrets. Commit a dot-env.example with placeholder values so teammates know what to fill in.
+
+Run docker compose config to see the fully resolved compose file with all variables substituted. This is useful for debugging before starting the stack.
+
+The docker compose Command Set.
+
+docker compose up -d starts all services in detached mode. Adding --build forces Compose to rebuild images before starting. docker compose down stops and removes containers and networks, leaving volumes intact. Adding -v removes volumes too. Adding --rmi all also removes the images.
+
+docker compose ps shows the status of all services in the stack. docker compose logs -f streams logs from all services, or from a specific service when you name it.
+
+docker compose exec runs a command in a running service container — equivalent to docker exec. docker compose run starts a new container for a service and runs a command in it — useful for one-off tasks like running database migrations. Adding --rm removes the container after it exits.
+
+docker compose restart restarts one or all services. docker compose pull fetches the latest images without starting anything. docker compose up --scale api equals three starts three instances of the api service.
+
+Summary.
+
+Docker Compose defines a multi-container application in a single compose.yaml file. One docker compose up -d starts everything. docker compose down tears it all down.
+
+The file has services, networks, and volumes as top-level sections. Each service maps to a docker run command with fields for image, build, ports, environment, volumes, networks, restart, depends_on, and healthcheck.
+
+The default network connects all services together with DNS resolution by service name. Custom networks provide tier-level isolation. Use internal networks for backend services that should not make outbound connections.
+
+Use depends_on with condition service_healthy and a healthcheck on the dependency for true startup ordering. Use dot-env files and variable substitution to keep secrets out of the compose file. Run docker compose config to verify the resolved configuration before starting.
+
