@@ -1,0 +1,66 @@
+Every container runs in its own network namespace — it has its own network interfaces, IP address, and routing table. Docker connects containers to each other and to the outside world through networks. Docker ships with several built-in network drivers, each solving a different connectivity problem.
+
+How Container Networking Works.
+
+When Docker creates a network, it creates a virtual network interface on the host. Each container on that network gets a virtual ethernet interface connected to it. Containers on the same bridge can talk to each other via their IP addresses. Docker adds iptables rules to NAT outbound traffic from containers through the host's physical network interface. Incoming traffic on published ports is forwarded from the host port to the container port via iptables destination NAT.
+
+The Bridge Driver.
+
+Bridge is the default network driver. Every container that doesn't explicitly specify a network joins the default bridge network.
+
+The default bridge network — named bridge and associated with the docker zero interface — has a significant limitation: containers on it can reach each other by IP address, but not by name. Docker does not provide DNS on the default bridge. This means if your web container needs to reach your database container, it must know the database container's IP address, which can change every time the container restarts.
+
+The legacy --link flag provided name resolution on the default bridge by editing /etc/hosts inside containers, but it is deprecated and should not be used in new work.
+
+User-defined bridge networks fix this. When you create your own bridge network with docker network create, Docker provides automatic DNS resolution by container name. Any container on the network can reach any other container on the same network simply by using the container's name as the hostname. User-defined bridges also provide better isolation — containers on different user-defined networks cannot communicate with each other unless explicitly connected.
+
+The host Driver.
+
+With the host driver, the container shares the host's network namespace entirely. There is no virtual interface, no NAT, and no port mapping. The container's process binds directly to the host's physical network interfaces. An Nginx container on a host network listens on host port 80 directly — no -p flag is needed and no port mapping rules are created.
+
+Use the host driver when you need maximum network performance with no NAT overhead, for monitoring agents that need to inspect host network traffic, or when binding to all host interfaces without the complexity of port mapping.
+
+The host driver is Linux only. On macOS and Windows, Docker runs inside a virtual machine, so host networking connects the container to the VM's network, not the real host machine's network. There is also no container isolation with host networking — the container can see all host network traffic and port conflicts with other host processes are possible.
+
+The none Driver.
+
+The none driver gives the container a network namespace with only a loopback interface. There is no external connectivity — the container cannot reach the host, other containers, or the internet.
+
+Use none for batch processing jobs that only read from and write to mounted volumes and have no need for network access, for security-sensitive workloads that should have zero network exposure, and for sandboxing untrusted code where you need to ensure the container cannot exfiltrate data over the network.
+
+The overlay Driver.
+
+The overlay driver creates a distributed network that spans multiple Docker hosts. Containers on different physical machines can communicate with each other as if they were on the same local area network. The underlying mechanism is VXLAN encapsulation — overlay packets are wrapped in UDP packets and sent over the host network between Docker daemons.
+
+Overlay networks require Docker Swarm mode to be initialised. Swarm provides the distributed key-value store that synchronises network state across all hosts in the cluster. Once Swarm is running, you create an overlay network with docker network create --driver overlay and deploy services that use it.
+
+In Kubernetes, CNI plugins like Flannel, Calico, and Cilium implement similar multi-host networking — the concept of encapsulating container traffic and routing it across hosts is the same.
+
+The macvlan Driver.
+
+The macvlan driver assigns each container its own MAC address and connects it directly to the physical network. The container appears as a physical device on the LAN with its own IP address, reachable directly from other devices on the network without any NAT or port mapping.
+
+You configure macvlan by specifying the parent physical interface, the subnet, and the gateway. You can then assign specific IP addresses to containers.
+
+Use macvlan for legacy applications that expect to be reached at a specific IP on the LAN, for network appliances that need a real MAC address on the physical network, and for situations where you need containers addressable at specific IPs without router configuration changes.
+
+Macvlan has significant limitations. It requires the physical network interface to be in promiscuous mode, which many cloud providers do not permit. By default, a macvlan container cannot communicate with the host it runs on because of how macvlan works at the kernel level. It is not suitable for most general-purpose web applications.
+
+Inspecting Networks.
+
+You list all networks with docker network ls. You inspect a specific network with docker network inspect to see its driver, subnet, gateway, and which containers are connected to it. You connect a running container to an additional network with docker network connect — a single container can be on multiple networks simultaneously, with a separate IP address on each. This is useful for a proxy container that needs to be reachable from one network while also reaching a backend on another.
+
+Choosing the Right Driver.
+
+If your workload spans multiple Docker hosts, you need overlay with Swarm or a Kubernetes CNI plugin. For single-host deployments, the decision depends on your isolation and performance requirements.
+
+If you need total network isolation with no external connectivity, use none. If you need maximum performance and are willing to give up isolation, use host. If you have a legacy application that needs to appear on the physical LAN with its own IP, use macvlan. For everything else — which is the vast majority of multi-container applications — use a user-defined bridge. It gives you automatic DNS resolution by container name, good isolation between networks, and works on every platform.
+
+Never use the default bridge network for multi-container applications in production. Always create a named user-defined bridge.
+
+Summary.
+
+Docker's network drivers: default bridge has no DNS resolution by name — use only for experiments. User-defined bridge provides automatic DNS by container name and is the correct default for most applications on a single host. Host shares the host's network stack — maximum performance, Linux only, no isolation. None provides total isolation with only loopback — for batch jobs and sandboxing. Overlay spans multiple hosts via VXLAN — requires Swarm mode. Macvlan assigns real MAC and IP addresses on the physical LAN — for legacy apps and network appliances.
+
+Use docker network connect to attach a running container to an additional network. Inspect network configuration and connected containers with docker network inspect.
+
