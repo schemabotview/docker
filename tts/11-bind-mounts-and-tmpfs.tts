@@ -1,0 +1,72 @@
+This notebook covers the other two Docker storage types beyond volumes: bind mounts, which mount a specific host path into a container, and tmpfs, which mounts RAM as a temporary in-memory filesystem inside the container.
+
+Bind Mounts.
+
+A bind mount maps a specific path on the host filesystem into the container. Unlike volumes, the host path is entirely under your control — Docker does not manage it, does not know about the files in it, and does not clean it up.
+
+The key difference from volumes is that the host path must already exist before you run the container. With the --mount syntax, Docker throws an error if the source path doesn't exist. With the short -v syntax, Docker will create the path as a directory if it's missing — which can be confusing if you expected a file to be there.
+
+You specify bind mounts with --mount type=bind, source equals the absolute host path, and target equals the container path. The short -v syntax accepts an absolute path starting with a forward slash as the source, which Docker distinguishes from a volume name. Bind mount sources must be absolute paths — relative paths like dot slash src fail.
+
+Changes on the host are immediately visible inside the container, and writes by the container are immediately visible on the host. There is no buffering or synchronisation delay — both sides see the same physical files.
+
+The Development Workflow.
+
+Bind mounts are the cornerstone of the Docker development workflow. You mount your source code directory into the container so that code changes on your laptop are immediately reflected inside the running container without a rebuild.
+
+This means your editor, linter, git, and all host tooling work normally on your files. The runtime — Python, Node, JVM — stays inside the container, ensuring everyone on the team uses the same version regardless of their operating system. When you build the production image, you use COPY to bake the source code in. The bind mount is only for development.
+
+Hot-reload frameworks like Flask debug mode and webpack dev server detect file changes and automatically restart or recompile when a watched file changes. Combined with a bind mount, this gives you a tight edit-reload cycle with no manual steps.
+
+Read-Only Bind Mounts for Configuration.
+
+Configuration files, TLS certificates, and environment-specific settings can be injected into a container at runtime via read-only bind mounts without baking them into the image. You add readonly to the --mount options or append colon ro to the -v short syntax.
+
+With a read-only mount, the container can read the file but any write attempt is blocked at the kernel level. This ensures the container cannot corrupt or overwrite configuration it shouldn't be modifying. The same image can be deployed in development, staging, and production with different configuration files injected at runtime — no rebuild required.
+
+Bind Mount Pitfalls.
+
+The first common issue is a UID and GID mismatch. Files on the host belong to your user — typically UID 1000. If the container process runs as a different user, it may not have permission to read or write those files. The simplest fix is to pass --user with the output of id -u and id -g to run the container process with the same UID and GID as your host user.
+
+The second issue affects macOS and Windows users. Docker on these platforms runs inside a virtual machine. Every file read or write through a bind mount crosses the VM boundary through a translation layer. For large source trees with many small files — particularly node_modules — this can be ten to one hundred times slower than native disk access. The recommended mitigation is to use Docker Desktop's VirtioFS backend, which is the default on recent Docker Desktop versions and significantly faster than the older osxfs. Another mitigation is to keep large dependency directories like node_modules inside a named volume rather than a bind mount, so they stay within the VM and avoid the translation overhead.
+
+Mounting the Docker Socket.
+
+A specific bind mount pattern is mounting the Docker daemon socket from the host into a container. This gives the container full access to the Docker daemon — it can list, create, start, and stop containers on the host as if it were running outside the container.
+
+This is used by CI agents that need to build Docker images during a pipeline run, and by management tools like Portainer. The security implication is severe: mounting the Docker socket effectively gives the container root-equivalent access to the host. Anyone who can execute commands in that container can escape the container boundary entirely. Only do this in controlled, trusted environments and never in containers that process untrusted external input.
+
+tmpfs Mounts.
+
+A tmpfs mount creates an in-memory filesystem inside the container. Data written to it is stored in RAM. It never touches the host disk. When the container stops or restarts, the data is gone — there is no persistence at all.
+
+You create a tmpfs mount with --mount type=tmpfs,target=/path. You can limit its size with tmpfs-size to prevent it from consuming unlimited RAM, and set permissions with tmpfs-mode.
+
+The primary use cases are sensitive data that must not be written to disk — API tokens, private keys, session credentials — scratch space for temporary files that benefit from RAM speed, and cache directories that should be thrown away on restart rather than accumulated on disk.
+
+Because data in a tmpfs mount never touches disk, it cannot be recovered by disk forensics after the container stops. This is meaningful in regulated environments where the residency of secrets on disk must be controlled.
+
+Choosing the Right Storage Type.
+
+The decision comes down to what the data is and how long it should live.
+
+Use volumes for anything that needs to persist across container replacements: database files, user uploads, application state. Volumes are Docker-managed, portable, and work cleanly across platforms.
+
+Use bind mounts for development — where you want live file editing from the host — and for injecting configuration or certificates from the host into the container at runtime.
+
+Use tmpfs for data that must never hit disk, for high-speed scratch space, and for ephemeral runtime files like socket files and PID files that a process creates and reads during its lifetime but that serve no purpose after it stops.
+
+A production container often combines all three: a volume for the data it persists, a read-only bind mount for configuration injected from the host, and a tmpfs for the runtime directory where the process writes its socket and temporary files.
+
+Summary.
+
+Bind mounts map an absolute host path into the container. Changes are immediately visible in both directions. Use them for development and read-only config injection. Add readonly to prevent container writes. Bind mount sources must be absolute paths.
+
+Pitfalls: UID/GID mismatches cause permission errors — use --user to match host identity. On macOS and Windows, bind mounts are slower due to VM overhead — use VirtioFS and keep large dependency directories in named volumes.
+
+Mounting the Docker socket gives root-equivalent host access — only in trusted environments.
+
+tmpfs is an in-memory filesystem: fast, never persisted to disk, cleared on container stop. Use it for secrets, scratch space, and ephemeral runtime files.
+
+Volumes for persistence and sharing. Bind mounts for development and config injection. tmpfs for secrets and ephemeral data.
+
