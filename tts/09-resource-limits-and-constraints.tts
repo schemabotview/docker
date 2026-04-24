@@ -1,0 +1,66 @@
+By default a container can use as much CPU, memory, and disk I/O as the host allows. On a shared host, one runaway container can starve every other workload. Resource limits are how you enforce isolation and protect the host.
+
+Docker resource constraints are implemented via Linux cgroups — control groups — the same kernel feature used by Kubernetes, systemd, and every other container runtime.
+
+Memory Limits.
+
+The --memory flag sets the maximum amount of RAM the container can use. You use suffixes: b for bytes, k for kilobytes, m for megabytes, g for gigabytes. When the container exceeds its memory limit, the Linux Out Of Memory killer terminates the process. Docker records this in the container's state as OOMKilled true.
+
+The --memory-swap flag controls the total amount of RAM plus swap the container can use. If you set --memory to 512 megabytes and don't set --memory-swap, Docker defaults to twice the RAM limit — 512 megabytes of RAM plus 512 megabytes of swap. If you set --memory-swap equal to --memory, you disable swap entirely for that container. If you set --memory-swap to negative one, the container has unlimited swap. Disabling swap is recommended for latency-sensitive workloads because swap access is much slower than RAM and can cause unpredictable latency spikes.
+
+The --memory-reservation flag is a soft limit. Docker doesn't enforce it strictly, but when the host is under memory pressure the container is expected to shrink to this amount. It must be lower than the hard --memory limit.
+
+If you need to prevent an OOM kill — for example during a critical operation — you can set --oom-kill-disable, but this can destabilise the host and should be used with extreme care.
+
+CPU Limits.
+
+The --cpus flag sets a hard ceiling on CPU usage expressed in number of cores. --cpus 1.5 means the container can use at most one and a half CPU cores worth of compute, regardless of how many cores the host has. This is implemented via the cgroup CPU quota mechanism. Under the hood, --cpus 1.5 sets a quota of 150,000 microseconds per 100,000 microsecond period.
+
+The --cpu-shares flag is a relative soft weight. The default is 1024. When the host is under CPU contention, containers with higher shares get proportionally more CPU time. When the host has spare capacity, all containers can use as much as they want — shares only activate under contention. Use --cpus for a hard ceiling; use --cpu-shares for relative prioritisation among competing containers.
+
+The --cpuset-cpus flag pins the container to specific CPU cores. You specify cores by number, by range, or by comma-separated list. This is useful for NUMA-aware deployments where you want a container's memory access to stay on the same NUMA node as its CPU cores, or for preventing cache thrashing between containers that share hot data.
+
+Block I/O Limits.
+
+Docker can throttle disk read and write throughput and operations per second per container. The --device-read-bps and --device-write-bps flags limit throughput in bytes per second on a specific block device. The --device-read-iops and --device-write-iops flags limit the number of I/O operations per second. You specify the actual block device path — for example /dev/sda — not a filesystem path.
+
+The --blkio-weight flag sets a relative I/O priority between 10 and 1000, similar to how --cpu-shares works for CPU. Higher weight means more I/O bandwidth under contention.
+
+PID Limit.
+
+A fork bomb is a process that continuously spawns child processes until it exhausts the system's process table and makes the host unresponsive. The --pids-limit flag caps the total number of processes the container can create. Once the limit is reached, further fork or exec calls fail. This is a cheap and effective safety net — set it to a reasonable value for the expected workload.
+
+Reading Limits From Inside the Container.
+
+Some runtimes auto-tune based on available memory. The JVM, for example, sizes its heap based on system memory. But inside a container, /proc/meminfo shows host memory, not the container's limit. This causes the JVM to allocate a heap larger than the container allows, triggering OOM kills.
+
+The correct place to read the container's actual memory limit is the cgroup filesystem. On cgroup version 2, the file is /sys/fs/cgroup/memory.max. On cgroup version 1, it is /sys/fs/cgroup/memory/memory.limit_in_bytes.
+
+Since Java 11, the JVM is cgroup-aware and reads the cgroup limit automatically. You should always use Java 11 or later in containers. The -XX:MaxRAMPercentage flag lets you set the heap size as a percentage of the cgroup limit. Setting it to 75 percent leaves room for non-heap memory — metaspace, native threads, and code cache — within the container's memory budget.
+
+Updating Limits on a Running Container.
+
+You can adjust memory limits, CPU limits, and restart policies on a running container without restarting it using docker update. This is useful for responding to production load changes — scaling up a container's memory limit when you see it approaching the cap, or scaling down a batch job after it completes its intensive phase.
+
+Choosing Limits in Practice.
+
+There is no universal formula. The practical approach is to first run the container under realistic load without limits and observe actual usage with docker stats. Then set the hard limit at around one and a half times the peak observed usage to give headroom for spikes. Monitor for OOM kills in production — a container that has been OOM killed will show OOMKilled true in docker inspect. An OOM kill means either the limit is too low or there is a memory leak. Investigate before simply raising the limit.
+
+For CPU, set --cpus to the 95th percentile of observed usage plus some buffer. Setting it to the absolute peak would cause throttling during normal load.
+
+Summary.
+
+--memory sets the hard RAM limit. Exceeding it triggers an OOM kill. --memory-swap controls RAM plus swap total — set equal to --memory to disable swap.
+
+--cpus is a hard CPU ceiling in fractional cores. --cpu-shares is a relative soft weight under contention. --cpuset-cpus pins the container to specific cores.
+
+Block I/O throttling uses --device-read-bps, --device-write-bps, --device-read-iops, and --device-write-iops on a specific block device.
+
+--pids-limit caps the process count to prevent fork bombs.
+
+docker update adjusts memory, CPU, and restart policy on a running container without restart.
+
+Inside containers, read limits from the cgroup filesystem rather than /proc/meminfo. The JVM is cgroup-aware since Java 11 — always use Java 11 or later in containers and set -XX:MaxRAMPercentage to size the heap as a fraction of the cgroup limit.
+
+Profile under realistic load, set limits with headroom, and monitor for OOM kills in production.
+
