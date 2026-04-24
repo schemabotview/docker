@@ -1,0 +1,106 @@
+A Dockerfile is a plain-text recipe that tells Docker how to build an image. Every image you use — nginx, python, node — was built from a Dockerfile. Writing your own means your application can be packaged, shipped, and run anywhere Docker runs, with zero manual setup on the target machine.
+
+How docker build Works.
+
+When you run docker build with a path, Docker does two things. First, it sends the build context — the directory you specify is packaged and sent to the Docker daemon. The daemon can only see files within that context. Second, it reads the Dockerfile top to bottom and executes each instruction. Every instruction that changes the filesystem produces a new layer on top of the previous one.
+
+You provide a tag with the minus-t flag to name the resulting image. The build context path — usually a dot for the current directory — goes at the end.
+
+The layer cache makes rebuilds fast. If an instruction and everything before it are unchanged, Docker reuses the cached layer instead of re-running it. The important consequence is that a cache miss at any layer invalidates all layers after it, even if those later instructions didn't change.
+
+dot dockerignore.
+
+Before the build context is sent, Docker reads a dot dockerignore file in the same directory as the Dockerfile. It works exactly like dot gitignore — you list paths you don't want included. Common entries are double underscore pycache underscore underscore, dot git, dot env, log files, and node underscore modules.
+
+This matters for three reasons: a smaller context is sent faster; secrets in dot env or dot git won't end up in the image; and files that change frequently won't invalidate the layer cache unnecessarily.
+
+FROM.
+
+Every Dockerfile starts with FROM. It sets the base image all subsequent instructions build on.
+
+When choosing a base image, you have options. The plain tag like python colon 3.12 is the full Debian image — largest and most compatible. The slim variant removes non-essential packages and is the right choice for most production images. The alpine variant uses Alpine Linux and is the smallest option, but its use of musl libc can cause compatibility issues with some Python packages. There is also the bookworm variant which pins an explicit Debian OS version for maximum reproducibility.
+
+In production, pin the exact tag down to the patch version — for example python colon 3.12.3-slim-bookworm rather than python colon 3.12-slim. This ensures your builds are reproducible even if the upstream image is updated.
+
+A special case is FROM scratch, which starts with a completely empty filesystem. This is used for statically compiled binaries in languages like Go or Rust that don't need a base operating system at all.
+
+RUN.
+
+RUN executes a shell command during the build and commits the result as a new layer.
+
+The key discipline is to combine related commands in a single RUN instruction. Running apt-get update in one RUN and apt-get install in the next is an anti-pattern. The update result gets cached separately and can go stale. Always chain update, install, and cleanup together using double ampersand to join them on a single logical line. End with rm -rf /var/lib/apt/lists/star to delete the package index cache, which is no longer needed and adds to the image size if left in.
+
+Shell form versus exec form applies to RUN, CMD, and ENTRYPOINT. Shell form writes the command as plain text — it runs via /bin/sh -c, giving you access to shell features like pipes and variable expansion. Exec form writes the command as a jay-son array. For RUN, shell form is usually more convenient. For CMD and ENTRYPOINT, exec form is strongly preferred — more on this shortly.
+
+COPY and ADD.
+
+COPY copies files or directories from the build context into the image. You specify the source path in the context and the destination path in the image. You can use glob patterns and you can set ownership with the chown flag.
+
+ADD does everything COPY does, plus it automatically extracts tar archives and accepts URLs as the source. The rule of thumb is: use COPY by default. ADD's extra behaviours are implicit and can surprise people. For URL downloads, prefer RUN with curl or wget — it's explicit and you can chain cleanup in the same layer.
+
+WORKDIR.
+
+WORKDIR sets the working directory for all subsequent RUN, COPY, ADD, CMD, and ENTRYPOINT instructions — and it becomes the container's initial working directory at runtime. If the directory doesn't exist, WORKDIR creates it.
+
+Always use WORKDIR instead of running cd in a RUN instruction. A cd in RUN has no effect on the next instruction because each RUN starts fresh from the current WORKDIR.
+
+ENV and ARG.
+
+ENV sets environment variables that are baked into the image. They are available both during the build and at container runtime. You can set multiple variables in one ENV instruction. They are visible in docker inspect and can be overridden at runtime with docker run minus-e.
+
+ARG declares a variable that only exists during the build. It is not present in the final image and is not available at container runtime. You pass ARG values with the double-dash build-arg flag. Common uses are parameterising the base image version, embedding a git commit sha, or setting a build date in labels.
+
+One important security note: don't use ARG for secrets. The values appear in the image's build history, accessible with docker history.
+
+EXPOSE.
+
+EXPOSE declares which port the containerised application listens on. It is documentation, not a security control. It does not publish the port or make it reachable from outside the container. You still need the minus-p flag in docker run to actually bind it on the host.
+
+EXPOSE does have one functional effect: when you run docker run with uppercase P, Docker maps all exposed ports to random available host ports.
+
+CMD versus ENTRYPOINT.
+
+This is the most commonly confused part of writing Dockerfiles. Understanding the difference clearly is essential.
+
+CMD sets the default command that runs when the container starts. If you supply a command after the image name in docker run, CMD is completely replaced. So if your CMD is python app.py and you run docker run myimage bash, bash runs — python app.py is ignored entirely.
+
+ENTRYPOINT sets a fixed executable that always runs. Instead of replacing it, arguments from docker run are appended to it. If your ENTRYPOINT is python and you run docker run myimage app.py, the container runs python app.py. If you run docker run myimage --version, it runs python --version.
+
+The standard pattern is to use both together. Set ENTRYPOINT to the fixed executable and CMD to the default arguments. This gives callers the flexibility to override the arguments without having to override the entrypoint. If they want to replace the entrypoint entirely, they use the double-dash entrypoint flag in docker run.
+
+The exec form rule applies critically here. Always write CMD and ENTRYPOINT in exec form — as a jay-son array. Shell form wraps the command in /bin/sh -c, which makes the shell process become PID 1 instead of your application. When docker stop sends a SIGTERM, it goes to the shell, not your app. The shell may just exit, killing your app without giving it a chance to shut down gracefully. Exec form ensures your process is PID 1 and receives signals directly.
+
+LABEL.
+
+LABEL attaches key-value metadata to the image. It has no effect on runtime behaviour. It is useful for tooling — recording maintainer contact, version, and description — and for filtering images with docker images --filter.
+
+Worked Example: Packaging a Python Web App.
+
+A complete Dockerfile for a Python Flask application looks like this.
+
+The first instruction is FROM python colon 3.12-slim, setting a lean base image. Next, ENV sets three variables: PYTHONDONTWRITEBYTECODE to prevent dot pyc files from being written into the image, PYTHONUNBUFFERED so that log output appears immediately without buffering, and PORT to document the default port. WORKDIR is set to slash app so all subsequent instructions run from there.
+
+The key layer ordering decision comes next. We COPY only requirements dot txt first, then RUN pip install. This way, the pip install layer is cached as long as requirements.txt doesn't change — even if the application code changes. Only after the dependencies are installed do we COPY the rest of the application code. Finally, EXPOSE documents port 8000 and CMD provides the gunicorn launch command in exec form.
+
+When you change a line in app.py and rebuild, Docker reuses the cached pip layer and only re-runs the COPY of the application code. This makes the common code-change-then-rebuild cycle fast.
+
+You can verify that exec form is working correctly by checking which process is PID 1 inside the running container. With exec form CMD, gunicorn should be PID 1 — not sh.
+
+Summary.
+
+docker build sends the build context to the daemon and executes each Dockerfile instruction as a layer. Use dot dockerignore to exclude files that don't belong in the image.
+
+FROM sets the base image. Prefer slim variants and pin exact tags for production. Use FROM scratch for statically compiled binaries.
+
+RUN runs commands during the build. Chain update, install, and cleanup in one RUN to keep layers small.
+
+COPY is the right default for getting files into the image. ADD adds archive extraction and URL fetching — use it only when you need those features.
+
+WORKDIR sets the active directory. Never use RUN cd.
+
+ENV bakes variables into the image and makes them available at runtime. ARG only exists during the build and is not in the final image.
+
+EXPOSE documents the port — it does not publish it.
+
+CMD provides the default command and is replaced entirely by docker run arguments. ENTRYPOINT sets a fixed executable that docker run arguments are appended to. Use both together for flexible, overridable defaults. Always use exec form for CMD and ENTRYPOINT so your process is PID 1 and handles signals correctly.
+
