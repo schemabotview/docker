@@ -1,0 +1,137 @@
+Running and inspecting containers.
+
+What is covered. This notebook is the deep dive on the docker run command and everything you do to a container after it starts. The full anatomy of docker run — every flag worth knowing, grouped by purpose. Foreground, detached, and interactive — what dash d, dash i, dash t, and the combination dash i-t actually do. Naming, hostname, and the remove flag — controlling identity and cleanup. The container lifecycle in depth — create, start, stop, kill, restart, pause and unpause, remove, and the states they transition between. Restart policies — no, on failure, always, and unless stopped — and how the daemon recovers containers after a host reboot. Resource limits — memory, memory plus swap, see-pee-yous, see-pee-you shares, and process-I-D limits — with the see-group primitives underneath. Environment variables, using dash e and dash-dash env-file, and the precedence rules. Logs — docker logs, follow, since, tail, and a preview of logging drivers. Looking inside a running container — exec, attach, inspect, top, stats, and diff. Moving files in and out with docker copy. Snapshotting with docker commit, and when, rarely, to reach for it. And live-updating limits with docker update.
+
+By the end you should be able to launch any container with the right flags, debug a stuck one, watch what it is doing in real time, and explain every column in docker p-s.
+
+The full anatomy of docker run.
+
+Docker run is the busiest command in docker. Its full shape is — docker run, then options, then the image, with an optional tag or digest, then an optional command, then any arguments to that command.
+
+The options divide into a few mental buckets. Lifecycle and attachment — dash d, dash i, dash t, dash-dash r-m, dash-dash name, and dash-dash hostname. Networking — dash p, dash capital P, dash-dash network, dash-dash d-n-s, and dash-dash add-host — covered in notebook five. Storage — dash v, dash-dash mount, dash-dash tmp-f-s, and dash-dash read-only — covered in notebook four. Environment — dash e, dash-dash env-file, dash w for working directory, and dash u for user. Resource limits — dash-dash memory, dash-dash memory-swap, dash-dash see-pee-yous, dash-dash see-pee-you-shares, dash-dash p-i-d-s-limit, and dash-dash u-limit. Security — dash-dash cap-add, dash-dash cap-drop, dash-dash security-opt, dash-dash user, and dash-dash read-only — covered in notebook eight. Restart and init — dash-dash restart and dash-dash init. And labels and metadata — dash-dash label.
+
+We covered networking and storage flags in passing in notebook one. We will spend whole notebooks on them later. This notebook is the deep dive on the other buckets.
+
+Foreground, detached, interactive.
+
+These three flags get combined a lot, and people memorise the combinations without knowing what each one means. Let us separate them.
+
+Dash d — detached. Without dash d, docker run attaches your terminal to the container's standard output and standard error. The container's output streams into your terminal, and docker run does not return until the container exits. Hitting control-c sends sig-int to the container. With dash d, the container is detached. It runs in the background and docker run immediately returns the container's I-D. The container's output is still captured — you can read it later with docker logs — just not streamed to your terminal. Use dash d for long-lived services, like web servers and databases — you want them running in the background. Skip dash d for one-shot commands, like build steps and scripts — you want to see the output, and have run block until done.
+
+Dash i — interactive, keep standard input open. Without dash i, the container's standard input is closed immediately. Any program that tries to read from standard input will see end-of-file and exit. That is fine for n-ginx. Broken for bash. With dash i, standard input stays open. Bytes you type in your terminal are piped to the container's standard input.
+
+Dash t — allocate a t-t-y. Without dash t, the container has no terminal. It is like running a command via ess-ess-h with dash capital T. Interactive prompts may look weird, line editing does not work, the clear command does not, colours might not appear. With dash t, docker allocates a pseudo-terminal for the container. Now it looks and feels like a real terminal — prompts, colours, and line editing all work.
+
+Why people write dash i-t together. Dash i-t, combining dash i and dash t, is the interactive shell combo. Whenever you want to drop into a container as if you were ess-ess-h'd in, you use dash i-t. For example, docker run dash i-t dash-dash r-m ubuntu tag twenty-four point oh-four bash. Or docker run dash i-t dash-dash r-m python tag three point twelve python. Or docker exec dash i-t, then your running container, then s-h. Without dash i, your typed input goes nowhere. Without dash t, the shell prompt looks broken.
+
+Why dash d dash i-t is weird, but sometimes useful. You usually do not combine dash d and dash i-t. But sometimes you want to start a long-lived container in the background that you will exec into later, and you want it to not exit because its main process closed standard input. The idiom is docker run dash d dash i-t dash-dash name sandbox ubuntu tag twenty-four point oh-four bash, then later docker exec dash i-t sandbox bash to attach a shell. The dash d dash i-t keeps bash alive in the background, waiting for standard input that is not coming. Cute. But docker run dash d ubuntu sleep infinity is clearer.
+
+Naming, hostname, and the remove flag.
+
+Two flags control how the container is identified, and one controls whether it sticks around.
+
+The name flag — give the container a stable name you will use to refer to it. If you do not, docker generates one like quirky borg or vibrant einstein, from the two-word docker name generator. Auto-generated names are fine for throwaways. Pick the name flag for anything you will talk to more than once. Names are unique on a host. You cannot have two containers named web, even if one is stopped — you have to docker remove web first, or pick a different name.
+
+The hostname flag sets the hostname inside the container — what the hostname command returns from within. By default this is the container's short I-D. Useful for services that include their hostname in logs or registration.
+
+The remove flag, dash-dash r-m, automatically removes the container when it exits. Without it, every docker run leaves an exited container around forever — until you docker remove it, or docker system prune. With it, the container is garbage-collected on exit. Use the remove flag for one-shot commands, such as docker run dash-dash r-m dash i-t ubuntu bash. You do not want graveyard containers cluttering docker p-s dash a. Skip the remove flag for production services — you might want the exit code and final logs of a crashed service for debugging.
+
+Trade-off — the remove flag is incompatible with the restart flag, other than restart no. A container cannot be both auto-removed and auto-restarted by docker.
+
+The lifecycle in depth.
+
+Notebook one sketched the lifecycle. Here is the full state diagram and the commands that move a container between states.
+
+Picture this. An image, then docker create produces a container in the created state. Docker start moves it to running. From running, docker pause moves it to paused. Docker unpause returns it to running. Also from running, docker stop, which sends sig-term, waits a grace period, and if needed sends sig-kill, moves it to stopped. Alternatively, docker kill, which is sig-kill immediately, also moves it to stopped. Or the container exits on its own. From stopped, docker start brings it back to running. Or docker remove deletes it for good — and the container is gone.
+
+The commands. Docker create image — set up a container but do not start it. Allocates the writable layer, assigns an I-D, fills in the name flag. You get a container I-D back. Rarely used directly — docker run is create plus start combined. Docker start, then a container, starts a created or stopped container. Keeps the existing writable layer, so any files written previously are still there. Docker stop — graceful stop. Sends sig-term. If the process has not exited after ten seconds, configurable with the time flag, sends sig-kill. This is what production deploys use. Docker kill — sig-kill immediately, no grace period. Use when stop will not work, or you do not care about clean shutdown. Docker restart — stop, then start, in one call. Docker pause and docker unpause — freezes all processes in the container's see-group using the kernel's freezer. The processes are still in memory, just not scheduled. Useful for taking consistent snapshots, or for debugging. And docker remove — delete a stopped container, releasing its writable layer. Add dash f to force-remove a running one — that does kill plus remove. Add dash v to also remove any anonymous volumes the container created.
+
+The corresponding inspection commands. Docker p-s — running. Dash a includes stopped. Dash q prints just I-Ds. Docker p-s dash-dash filter status equals exited — only stopped containers. And docker inspect, then container, gives you the full j-son state.
+
+Restart policies.
+
+By default, a container that exits stays exited. Production services need to recover from crashes, and from host reboots. The restart flag controls that.
+
+Four policies. No, which is the default — never restart. On-failure, with an optional max-retries count — restart if the container exits non-zero. Always — restart whenever the container exits, and whenever the daemon starts. So after system-control restart docker, or a host reboot, the container comes back. Even if you docker stop it manually, the daemon will start it again on next boot. And unless-stopped — like always, except if you explicitly docker stop it, it stays stopped across daemon restarts. The usual production choice.
+
+A typical production line — docker run dash d dash-dash restart equals unless-stopped dash-dash name a-p-i my-org slash a-p-i tag one point zero.
+
+A few details that bite. The restart policy applies after the first successful start. A container that fails to start at all — bad image, syntax error — does not get retried. Restart backoff is exponential, capped at about a minute, to avoid hammering the host when a container is in a crash loop. The restart counter resets when the container has been running successfully for ten seconds. Restart and the remove flag are mutually exclusive. Pick one. And you can inspect a container to see its policy and how many times it has restarted, with docker inspect dash-dash format of dot host-config dot restart-policy and dot restart-count.
+
+Resource limits.
+
+By default, a container can consume all the host's memory and see-pee-you. That is almost never what you want — one runaway container can take down the rest. Docker exposes the kernel's see-group limits via a few run flags.
+
+Memory. Dash-dash memory equals, then a value like five-twelve-m, one-g, or two-g, is a hard cap on ram. If the container exceeds it, the kernel's out-of-memory killer kills the process. Container exits with code one-three-seven. Dash-dash memory-swap is the total of memory plus swap. Set equal to the memory flag to disable swap entirely — recommended for predictable behaviour. Set to negative one to allow unlimited swap. Dash-dash memory-reservation is a soft limit. Under memory pressure, the kernel tries to pull this container back to the reservation, but does not kill it. And dash-dash oom-kill-disable disables the out-of-memory killer for this container. Do not use this. It just shifts the out-of-memory problem elsewhere on the host.
+
+See-pee-you. Dash-dash see-pee-yous equals one point five is equivalent to one point five see-pee-yous worth of time. Implemented under the hood with see-pee-you-period and see-pee-you-quota, which is c-f-s bandwidth control. This is the easy, modern flag. Dash-dash see-pee-you-shares equals five-twelve is a relative weight, default one-thousand-twenty-four. Only matters when see-pee-you is contended. A container with shares five-twelve gets half the see-pee-you time of one with shares one-thousand-twenty-four, when both are runnable. And dash-dash see-pee-you-set-see-pee-yous equals zero comma one pins to specific see-pee-you cores. Useful for low-latency workloads that do not want to migrate between cores.
+
+Other limits. Dash-dash p-i-d-s-limit equals two-hundred caps the number of process I-Ds in the container. Stops fork bombs. Dash-dash u-limit, then a name and a value, sets a u-limit — open file descriptors, for example. Same flag, several limits.
+
+Reading limits back. Docker inspect with format of dot host-config dot memory and dot host-config dot nano-see-pee-yous. Memory is in bytes. Nano see-pee-yous is billionths of a see-pee-you. So one-point-five-billion means one point five see-pee-yous.
+
+Environment variables.
+
+Containerised apps read configuration from environment variables — the twelve-factor pattern. Docker has two ways to set them.
+
+Inline with dash e, one variable per flag. For example, docker run dash e database-u-r-l equals postgres colon slash slash, then dash e log-level equals info, then the image.
+
+Bulk with dash-dash env-file file, a file of key equals value lines, with hash for comments. Then docker run dash-dash env-file equals a-p-i dot env, then the image.
+
+Precedence, lowest to highest. First, variables baked into the image with environment in the dockerfile. Second, env-file files — later files win over earlier. Third, dash e flags — rightmost wins on duplicates.
+
+A neat shorthand — dash e var with no value inherits the value from your host shell. Handy for passing tokens without echoing them on the command line. For example, export github-token equals g-h-p underscore something, then docker run dash e github-token, then the image.
+
+For secrets, environment variables are widely used but not ideal. They leak via docker inspect, slash proc, and crash dumps. Notebook eight covers proper secrets — compose secrets, swarm secrets, build-kit secret mounts.
+
+Logs.
+
+Docker logs, then a container, reads what the container's main process wrote to standard output and standard error. Crucial commands and flags. Docker logs container — print everything since the container started. Dash f — follow new output as it arrives, like tail dash f. Control-c detaches. Dash-dash tail equals one-hundred — last hundred lines. Dash-dash since equals ten-m — only entries from the last ten minutes. Accepts one-h, an i-s-o-eight-six-oh-one timestamp, and so on. Dash-dash until equals one-h — entries up to one hour ago. Intersect with since to window. And dash t prefixes each line with the daemon's timestamp.
+
+Where do logs actually live. The daemon writes logs to a file managed by the active logging driver. The default driver is j-son-file, and the file lives at slash var slash lib slash docker slash containers slash container-I-D slash container-I-D dash j-son dot log. Docker logs reads from there. Other drivers ship logs elsewhere — journal-d, sys-log, ay-double-you-ess logs, gelf, fluent-d, splunk. You set the driver globally in slash e-t-c slash docker slash daemon dot j-son, or per-container with the log-driver flag. Notebook ten covers configuration. For now just know — docker logs only works for j-son-file and journal-d. If you switch drivers, you read logs from the destination instead.
+
+Two gotchas. First, buffered output. Many runtimes — python especially — buffer standard output when it is not a terminal. Your prints can take ages to appear in docker logs. Set python-unbuffered equals one, or use python dash u. Second, disk fill. The j-son-file driver grows unbounded unless you configure rotation. In the daemon configuration, set log-driver to j-son-file, and log-opts with max-size of ten-m and max-file of three. Without this, a chatty container can fill your disk in hours.
+
+Looking inside a running container.
+
+The container is running, and you want to see what is going on. Six tools.
+
+Docker exec dash i-t container command runs a command inside. The single most-used debugging command. Drops you, or a script, into a running container without affecting its main process. For example, docker exec dash i-t web s-h for an interactive shell. Docker exec web list slash app for a one-shot command. Docker exec dash u root web bash to run as a specific user. Docker exec dash e debug equals one web, then your tool, with extra environment. The exec'd process is a sibling of the container's main process, not a child. When you exit, the container keeps running.
+
+Docker attach container connects to the main process. Hooks your terminal up to the container's existing standard input, standard output, and standard error. Unlike exec, you are not spawning a new process. You are talking to process I-D one. Control-c sends sig-int to process I-D one, which usually kills the container. To detach without killing, use the docker detach sequence — control-p, control-q. Or run docker attach dash-dash sig-proxy equals false, so your control-c does not get forwarded. Use attach to see current standard output in real time, without docker logs dash f's buffering. Use exec for everything else.
+
+Docker inspect container dumps the full j-son state of the container — image, command, arguments, environment, mounts, network configuration, restart policy, resource limits, current state, exit code, out-of-memory-killed flag, started and finished timestamps, and eye-pee address. With dash-dash format and a go template, you can pull out just one field. For example, docker inspect dash-dash format of dot state dot status web, or dot network-settings dot eye-pee address. Once you know the format syntax, it is faster than piping to j-q.
+
+Docker top container shows what processes are running, like the p-s command but scoped to the container. Docker top web, or docker top web aux to pass any p-s flags.
+
+Docker stats shows live resource usage. Docker stats on its own shows all running containers, live updating. Docker stats web db scopes to specific containers. Dash-dash no-stream takes one snapshot, with no live update. Shows see-pee-you percent, memory usage and limit, network input output, block input output, and process I-Ds.
+
+Docker diff container shows what files changed in the writable layer. Shows what the container has added, changed, or deleted, relative to its image. Useful for spotting "the app wrote to its own filesystem," which is usually a sign it should be writing to a volume instead.
+
+Moving files in and out.
+
+Docker copy, written as docker c-p, copies files or directories between the container and the host. Works on running and stopped containers. Examples. Host to container — docker c-p dot slash config dot y-a-m-l web colon slash app slash config dot y-a-m-l. Container to host — docker c-p web colon slash var slash log slash n-ginx slash access dot log dot slash access dot log. Whole directory — docker c-p web colon slash e-t-c slash n-ginx slash dot to dot slash n-ginx-conf.
+
+A few details. The container path is absolute. Host path can be relative. If the destination does not exist, it is created. If it exists as a directory, the source is placed inside it. Docker copy does not follow symbolic links by default — use dash capital L. Permissions and ownership are preserved on the source. And this is not how you do persistent storage. For data that should survive container removal, use volumes — notebook four. Docker copy is for ad-hoc operations — pulling out a log, dropping in a configuration to test.
+
+A different model — docker exec dash i with tar. For piped transfers, often used in continuous integration, you can stream tar through standard input and standard output. For example, tar dash c-f dash of dot slash config, piped to docker exec dash i web tar dash x-f dash dash capital C slash app. Or docker exec web tar dash c-f dash of slash var slash log, piped to tar dash x-f dash dash capital C dot slash host-logs. This pattern is what docker copy does internally.
+
+Snapshotting — docker commit.
+
+Docker commit container new-image-name takes a snapshot of the container's current filesystem and creates a new image from it. For example, docker run dash i-t dash-dash name lab ubuntu tag twenty-four oh-four bash. Inside, apt update and-and apt install dash y python-three vim. Exit. Then docker commit lab my-ubuntu-with-python. Then docker run dash i-t dash-dash r-m my-ubuntu-with-python bash — has python and vim.
+
+This works. But you should almost never use it. The result is opaque. There is no record of how the image was built, no dockerfile to review, no diff against the base. It is the save-game of docker images — convenient, but you have lost the recipe.
+
+When commit is okay. Exploration — you are poking at an image, want to save state for later before you destroy the container. Capturing a forensic snapshot of a crashed container for debugging.
+
+When commit is not okay. Anything you will need to rebuild later. Anything you will share with a teammate. Anything that goes to a registry for production. For those, write a dockerfile. Future-you and future-teammates will thank present-you.
+
+Live-updating limits — docker update.
+
+For an already-running container, you can change some runtime settings without restarting it. Docker update is the command. For example, docker update dash-dash memory equals one-g dash-dash see-pee-yous equals two web. Or docker update dash-dash restart equals unless-stopped web.
+
+What you can change at runtime — resource limits, including memory, memory-swap, see-pee-yous, see-pee-you-shares, see-pee-you-set-see-pee-yous, see-pee-you-period, see-pee-you-quota, and p-i-d-s-limit. Restart policy. And block input output weight.
+
+What you cannot change at runtime — networking, including port mappings, network mode, and hostname. Volumes and mounts. Environment variables. The image. And entry-point, command, and user. For anything in this list, you have to stop, remove, and re-create the container.
+
+The use case for docker update is this is using too much memory and getting out-of-memory-killed — let me raise the limit without losing its state. Or — I want to flip restart policy to unless-stopped, so it survives a daemon restart.

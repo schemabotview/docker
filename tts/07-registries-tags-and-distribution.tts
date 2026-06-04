@@ -1,0 +1,149 @@
+Registries, tags, and distribution.
+
+What is covered. This notebook is the deep dive on how images move between machines. What a registry actually is — a server speaking the open container initiative distribution a-p-i. Not magic. Docker hub, and the alternatives — g-h-c-r, e-c-r, g-a-r, a-c-r, quay, harbor. The push and pull workflow — docker tag, docker push, and what the daemon uploads. Authentication — docker login, the docker config dot j-son file, credential helpers, and registry tokens. Image references revisited — registry, namespace, repo, tag, digest, and what each piece controls. Tagging conventions in practice — latest, semantic versioning, sliding tags, git s-h-a-s, and channels. Image manifests and digests — what actually gets pushed, and why digests are immutable. Manifest lists, also called the open container initiative image index — one tag, many architectures. Content addressability and dedup — why pushing a two-hundred megabyte image is sometimes free. Running a local registry, using registry colon two for air-gapped or just for testing. Mirroring and pull-through caching — making your local network the default registry. Garbage collection on a registry — how blobs get cleaned up. And the image scanning preview — vulnerability scans, with the deep dive in notebook eight.
+
+By the end you should be able to push and pull images against any registry, set up a private one in five minutes, and explain exactly what bytes leave your laptop when you docker push.
+
+What a registry actually is.
+
+A container registry is a web service that stores and serves images, speaking a specific h-t-t-p a-p-i called the open container initiative distribution specification — formerly the docker registry h-t-t-p a-p-i version two. Every registry — docker hub, g-h-c-r, e-c-r, your private one — implements the same protocol. The docker command-line client does not know which registry it is talking to. It just speaks the standard.
+
+Two things a registry stores. First, blobs. Content-addressable byte storage. Layers are blobs. Image configurations are blobs. Each blob is identified by its s-h-a two-five-six digest. Uploading the same bytes twice is a no-op. The second upload sees the digest already exists and skips. Second, manifests. Small j-son documents that describe an image — a list of layer digests, the configuration blob digest, the platform, and a few labels. The manifest itself has a digest. And — a tag is just a mutable pointer from a name, like one point twenty-seven point zero, to a manifest digest.
+
+So an image push consists of four steps. First, upload each layer's blob — deduped by digest, so only new layers cross the wire. Second, upload the image configuration blob. Third, upload the manifest that lists them. Fourth, update the tag pointer to the manifest's digest.
+
+That is it. Pulls are the same steps reversed. There is no compression magic, no proprietary protocol — just h-t-t-p gets and puts against a digest-based content store.
+
+Once you understand that, the rest of this notebook is mostly "which registry, which credentials, which tag conventions." The mechanics are always the same.
+
+Docker hub and the alternatives.
+
+Docker hub, at docker dot eye-oh, is the default. If you docker pull n-ginx, you are pulling from hub. Free for public images. Rate-limited for anonymous pulls — since twenty-twenty, around one hundred pulls per eye-pee per six hours. Paid tier raises the cap.
+
+The major alternatives. Github container registry, at g-h-c-r dot eye-oh, is best for anything that lives on github. Free for public, integrated with github actions and packages. The most common hub alternative for open-source today. Ay-double-you-ess elastic container registry, with hostname account dot d-k-r dot e-c-r dot region dot amazon-ay-double-you-ess dot com, is best for ay-double-you-ess workloads. Tight identity-and-access-management integration. Google artifact registry, with hostname region dash docker dot p-k-g dot dev, is best for g-c-p workloads. Replaces the older g-c-r dot eye-oh. Azure container registry, with hostname name dot azure-c-r dot eye-oh, is best for azure workloads. Quay, from red hat, at quay dot eye-oh, is best for open-shift and the red hat ecosystem. Harbor is the standard self-hosted on-prem private registry, with role-based access control, scanning, and replication. And distribution, also called registry colon two, is the plain open-source reference registry. Run for testing or for an air-gapped network.
+
+You can mix freely. A team might build in continuous integration, push to g-h-c-r for storage, mirror to e-c-r for prod-side pull speed, and have a local harbor for on-prem clusters. Same images, same digests. Only the u-r-l changes.
+
+The push and pull workflow.
+
+The full cycle for getting an image you built onto a registry. First, tag your local image with the registry-qualified name — docker tag flask-demo tag zero point one to g-h-c-r dot eye-oh slash my-org slash flask-demo tag zero point one, and also to g-h-c-r dot eye-oh slash my-org slash flask-demo tag latest. Second, authenticate to the registry with docker login g-h-c-r dot eye-oh. Third, push both tags with docker push. Fourth, elsewhere, docker pull g-h-c-r dot eye-oh slash my-org slash flask-demo tag zero point one, then docker run.
+
+What gets uploaded. When you docker push, the daemon walks the image's layers in order. For each — compute the layer's digest, it already has this from the build. Ask the registry "do you have s-h-a two-five-six colon a-b-c?" — that is a head request. If yes, skip. No bytes uploaded. If no, upload. Stream the layer to the registry.
+
+So pushing a new build that shares ninety percent of its layers with the previous build uploads only the ten percent that changed. The shared base layers were already there. This is content-addressable dedup, and it is why docker push can be much faster than the image size suggests.
+
+What docker tag does. Docker tag source target does not copy data. It adds another name pointing at the same image — same manifest digest. After the two tag calls above, both flask-demo tag zero point one and g-h-c-r dot eye-oh slash my-org slash flask-demo tag zero point one refer to the same bytes on disk. Same docker image inspect, same digest.
+
+This is why tagging is free, and why teams tag the same image with multiple names — semantic version, git s-h-a, latest — before pushing.
+
+Authentication.
+
+Docker login registry prompts for username and password, or a token, then stores credentials in the docker config dot j-son file. Subsequent docker pull and push to that registry are authenticated automatically. Docker login on its own defaults to docker dot eye-oh. Docker login g-h-c-r dot eye-oh is for a specific registry. Docker login dash u user dash p token g-h-c-r dot eye-oh is non-interactive — avoid in shells with history. Echo dollar-token piped to docker login dash u user dash-dash password-stdin g-h-c-r dot eye-oh is safer, via standard input. Docker logout g-h-c-r dot eye-oh forgets credentials.
+
+The docker config dot j-son file holds an auths block, with one entry per registry, where the auth field is the base-sixty-four encoding of user colon token. Storing a base-sixty-four of user colon token in a file is not secret storage. Anyone reading the file has your credentials.
+
+Credential helpers — the right answer. A credential helper offloads storage to the operating system keychain or a secret manager. On mac o-s — docker-credential-o-s-x-keychain, which docker desktop installs. On windows — docker-credential-win-cred. On linux — docker-credential-pass, which uses g-n-u p-g and pass, or docker-credential-secret-service. And cloud-specific helpers — docker-credential-e-c-r-login uses ay-double-you-ess identity-and-access-management. Docker-credential-g-c-r is for g-c-p. Docker-credential-a-c-r-env is for azure.
+
+The creds-store field in config dot j-son names the helper. With one configured, the auths entry's auth field disappears from the file. The helper holds it instead.
+
+Per-registry credentials and continuous-integration tokens. For continuous integration, use per-registry tokens instead of passwords. Docker hub uses personal access tokens. G-h-c-r uses the github token environment variable, which is auto-injected in github actions, or personal access tokens with read-packages or write-packages scopes. E-c-r uses short-lived tokens from ay-double-you-ess e-c-r get-login-password, refreshed by the credential helper.
+
+Hard-coded passwords in continuous-integration scripts are the most common docker security failure. Use tokens. Scope them tightly. Rotate them on schedule.
+
+Image references revisited.
+
+From notebook two, recall the reference grammar — optional registry host with an optional port, slash. Optional namespace, slash. Repository, with an optional colon tag and an optional at digest.
+
+Now we can fill in the details for what each piece controls. The registry host and port default to docker dot eye-oh, and determine which registry's a-p-i to hit. The namespace defaults to library on docker hub, and determines which user or organisation the image belongs to. The repository is required, and is the image's name within the namespace. The tag defaults to latest, and determines which manifest the registry points to right now. Mutable. The at digest has no default. It is a specific manifest digest. Immutable. Wins over tag if both present.
+
+A few real-world examples and what they imply. N-ginx — docker hub, library slash n-ginx, latest tag. Probably the freshest stable n-ginx. G-h-c-r dot eye-oh slash my-org slash a-p-i tag v one point two point three — g-h-c-r, my-org, a-p-i repo, tag v one point two point three. Could be re-pushed at any time. G-h-c-r dot eye-oh slash my-org slash a-p-i at s-h-a two-five-six colon a-b-c — same image, but pinned. Re-pushes of v one point two point three will not change what this resolves to. One-two-three-four-five-six dot d-k-r dot e-c-r dot you-ess dash east dash one dot amazon-ay-double-you-ess dot com slash billing slash processor tag prod dash twenty-twenty-six dash oh-six dash oh-four — private e-c-r, dated channel tag. Production deploys often look like this.
+
+Tag plus digest together is the common production pattern. Tag for human readability, digest for the byte-exact guarantee. Kubernetes manifests committed to git often look like image colon g-h-c-r dot eye-oh slash my-org slash a-p-i tag v one point two point three at s-h-a two-five-six colon a-b-c. The cluster pulls by digest. The tag is purely there for engineers reading the manifest.
+
+Tagging conventions in practice.
+
+Notebook two introduced the patterns. In a real organisation, you will see them combined in a versioning scheme like this.
+
+At build time, continuous integration tags the freshly-built image with the git s-h-a — my-app tag a-one-b-two-c-three-d. A semantic-version-from-tag, if the commit is a tagged release — my-app tag one point four point two. And the branch channel — my-app tag main, r-c, or edge. Continuous integration pushes all of them. They all point at the same manifest digest, so the cost is one upload.
+
+At deploy time, the deploy manifest references the image by digest — my-app at s-h-a two-five-six — for reproducibility. Or by immutable semantic version — my-app tag one point four point two — assuming your organisation enforces tag immutability.
+
+The "is latest ever okay" question. For images you publish, almost never. Latest is a moving target. Downstream users get random versions. For images you consume locally, fine. Docker run n-ginx saves typing. For production deploys, never. Even if you trust yourself not to re-push latest, a docker pull six months from now will not necessarily get the image you tested with.
+
+Tag immutability. Some registries can be configured to reject re-pushes of an existing tag. E-c-r has immutable tags. Harbor has immutable repositories. Turn this on for your release tags. Mistakes will not silently rewrite history.
+
+Image manifests and digests.
+
+When you push, the registry stores blobs — layers and configuration — and manifests, which are j-son pointing at the blobs. The manifest is the source of truth for "what is this image."
+
+A simplified single-platform image manifest is a j-son object with schema-version two, media-type for the open container initiative image manifest, a configuration section with media-type, digest, and size, and a layers array with the same fields for each layer.
+
+That j-son, exactly as serialised, is the canonical bytes of the image. S-h-a two-five-six those bytes and you get the image's digest. Change anything — a layer order, a byte in the configuration — and the digest changes. That is why digest equals identity. It cannot be tampered with without becoming a different image.
+
+Inspecting an image's manifest. Docker build-x image-tools inspect reference shows the manifest. Docker build-x image-tools inspect n-ginx alpine. Docker build-x image-tools inspect n-ginx alpine dash-dash raw prints the actual j-son.
+
+For older docker versions or compatibility, the s-kop-ee-oh tool is the standard way to introspect registries without pulling. S-kop-ee-oh inspect docker colon slash slash n-ginx alpine. S-kop-ee-oh inspect dash-dash raw, piped to j-q.
+
+Manifest lists — one tag, many architectures.
+
+A single tag like n-ginx alpine works on an intel mac, an apple silicon mac, an x-eighty-six server, and an arm raspberry pi. How. The tag actually points at a manifest list — officially, the open container initiative image index — which is a thin j-son object listing per-architecture manifests.
+
+Picture this. N-ginx alpine points to a manifest list. The manifest list has three entries — linux slash a-m-d sixty-four points to manifest A, which points to its layers. Linux slash arm sixty-four points to manifest B, with its layers. Linux slash arm slash v seven points to manifest C, with its layers.
+
+When you docker pull n-ginx alpine on an arm mac, the daemon fetches the manifest list, picks the entry matching its platform — linux slash arm sixty-four — and pulls that manifest's layers. The other architectures' bytes are never downloaded.
+
+Building a manifest list yourself. First, docker build-x create dash-dash name multi dash-dash use dash-dash bootstrap. Then, docker build-x build dash-dash platform linux slash a-m-d sixty-four comma linux slash arm sixty-four, dash t g-h-c-r dot eye-oh slash my-org slash a-p-i tag one point two point three, dash-dash push, dot. Dash-dash push is mandatory — a manifest list can only live in a registry, not in a local image store. After that one command, g-h-c-r dot eye-oh slash my-org slash a-p-i tag one point two point three works on both architectures.
+
+Inspecting a manifest list. Docker build-x image-tools inspect n-ginx alpine shows the name, media-type — the open container initiative image index — digest, and a list of manifest entries with their platform.
+
+Running a local registry.
+
+For testing, air-gapped networks, or as a building block for a private registry, the open-source registry colon two image runs a fully-functional open container initiative distribution server in one container.
+
+Start a registry on port five-thousand with docker run dash d dash p five-thousand colon five-thousand dash-dash name registry dash-dash restart equals always registry colon two. Tag and push to it — docker tag flask-demo tag zero point one local-host colon five-thousand slash flask-demo tag zero point one, then docker push. Pull from it — works from anywhere that can reach the host — docker pull local-host colon five-thousand slash flask-demo tag zero point one.
+
+That is a working registry in two commands.
+
+Persistence. Without a volume, blobs vanish when the container dies. Add storage with dash v registry-data colon slash var slash lib slash registry.
+
+T-l-s and authentication. Registry colon two by default speaks plain h-t-t-p. For non-local-host use you should put it behind a t-l-s-terminating proxy, like n-ginx or caddy, and configure authentication, like h-t-passwd or open-i-d connect. The image's docs walk through the environment variables.
+
+For production, most teams reach for harbor instead. It wraps registry colon two with a user interface, role-based access control, replication, and built-in image scanning. Same protocol, just a richer front.
+
+Mirroring and pull-through caching.
+
+A common pattern at scale. Your team pulls n-ginx alpine thousands of times a day across continuous integration and production. Hitting docker hub for each pull is slow — latency, rate limits — and fragile. Docker hub outage equals your deploys fail.
+
+The fix — a pull-through cache. A local registry that, on a miss, fetches from the upstream and caches the result. Run docker run dash d dash p five-thousand colon five-thousand dash-dash name cache dash e registry-proxy-remote-u-r-l equals h-t-t-p-s colon slash slash registry dash one dot docker dot eye-oh dash v cache-data colon slash var slash lib slash registry registry colon two.
+
+Now your continuous integration configures docker to use local-host colon five-thousand as a registry mirror — in the daemon configuration, set registry-mirrors to a list including the cache. The first pull of n-ginx alpine traverses the cache and stores blobs. Subsequent pulls are served from cache at local-area-network speed.
+
+G-h-c-r, e-c-r, and g-a-r all support similar pull-through configurations via their own proxy modes. For organisations doing thousands of pulls per day, this saves significant money and latency.
+
+Mirror versus proxy. Two related concepts. Mirror — the cache holds the same image references as upstream. N-ginx alpine resolves the same way. The daemon picks the cache first and falls back to the original. Proxy — same idea, just named differently in some registries' user interfaces.
+
+The docker daemon flag is registry-mirrors. E-c-r and g-a-r have explicit pull-through-cache features that handle the same workflow with cloud-managed storage.
+
+Garbage collection on a registry.
+
+A registry that has been running for months has thousands of blobs. Many for tags that were overwritten, or images that nobody references anymore. Garbage collection sweeps these.
+
+For registry colon two — stop pushes during garbage collection, or run in read-only mode. Then docker exec registry, registry garbage-collect dash-dash delete-untagged, slash e-t-c slash distribution slash config dot y-m-l.
+
+What this does. Walk all manifests in storage. Walk all blobs referenced by those manifests. Delete blobs that are not referenced. With dash-dash delete-untagged, also deletes manifests with no tag — the untagged-image case from docker images, where the repository column shows angle-bracket none.
+
+For harbor and the cloud registries, garbage collection is a user-interface or policy concern. You do not run it by hand. You configure retention rules — "keep last ten tags," "delete builds older than thirty days that are not prod-anything."
+
+Why you would care. Storage grows surprisingly fast. A continuous-integration pipeline pushing one image per commit accumulates a multi-gigabyte registry inside a quarter. Without garbage collection and a retention policy, your registry storage bill just keeps climbing.
+
+Image scanning preview.
+
+Modern registries — hub, e-c-r, g-h-c-r, harbor, quay — scan pushed images against common-vulnerabilities-and-exposures databases and flag known vulnerabilities, usually with severity buckets and links to the upstream advisory.
+
+The scan results live alongside the image and can be fetched via a-p-i. Common patterns. Continuous-integration gate — fail the build if a new image introduces a high or critical c-v-e that was not already present in the base image. Tools — trivy, gripe, snyk, the registry's own scanner. And admission control — kubernetes admission controllers like ky-vern-o and o-p-a gatekeeper refuse to schedule pods whose images have not been scanned, or have unmitigated criticals.
+
+For example, trivy image g-h-c-r dot eye-oh slash my-org slash a-p-i tag one point two point three. Or grype on the same reference.
+
+Both produce a list. The image and its base — for example, debian twelve point five. A total count, broken into unknown, low, medium, high, and critical. And one row per finding, with library name, c-v-e identifier, severity, the installed version, and the fixed version.
+
+Notebook eight goes deep on container security, and how to reduce the surface area — smaller bases, non-root users, distroless, dropping capabilities. Scanning is the detection half. Supply-chain hygiene is the prevention half.

@@ -1,0 +1,147 @@
+Getting started with docker.
+
+What is covered. This notebook walks through what a container actually is — an isolated process tree on a host that shares the host's kernel, not a tiny virtual machine. The difference between an image and a container — the frozen template versus the running instance. Why docker matters in the world today, and where containers live in production. Getting docker installed, walking through docker desktop, docker engine on linux, colima, and a cloud virtual machine, with a recommendation for which path to pick. Your first container, by running docker run hello world, and what just happened under the hood. The docker architecture — the command-line client, the daemon called docker-d, the runtime supervisor called container-d, and the low-level runtime called run-see. The anatomy of a docker command, using the modern object then verb syntax. The core container lifecycle — run, p-s, stop, start, remove, and logs. Container exit codes, and what the common ones mean. And getting help when you forget.
+
+By the end of this notebook you should be able to install docker, run your first container, inspect it, stop it, clean it up, and know what each of those words actually means. We assume you are comfortable on a linux shell — change-directory, list, p-s, cat — but assume nothing about images, containers, or the daemon.
+
+What is a container.
+
+If you ask ten people what a container is, you will get ten slightly different answers. The cleanest one-line definition is — a container is an isolated process tree on a host, running its own filesystem and seeing its own network, while sharing the host's kernel. That sentence does a lot of work. Let us pick it apart.
+
+An isolated process tree. When you start a container, the kernel gives it its own process namespace. Inside the container, p-s shows only the processes that container started. Process I-D one is its process I-D one, not the host's. From the host, those same processes are still visible, with different process I-Ds. The kernel is just lying to the container about who else is on the box.
+
+Its own filesystem. The container sees a root filesystem at slash that was assembled from an image — a tarball of files that someone built earlier. Its slash e-t-c, slash you-ess-are, and slash var are not your host's slash e-t-c, slash you-ess-are, and slash var. They live in a separate area of disk and get mounted in at start.
+
+Its own network. By default the container gets a virtual network interface with its own eye-pee address, on a bridge network managed by docker. Sockets it opens are its sockets, not your host's.
+
+Sharing the host's kernel. This is the punchline. A container does not boot its own linux. There is no separate kernel inside the container — every system call the container makes goes straight to your host's kernel. That is why a container starts in milliseconds, weighs megabytes instead of gigabytes, and cannot run a different operating system than the host kernel.
+
+Containers versus virtual machines.
+
+Here is the picture that locks this in. Picture two stacks side by side. On the left, virtual machines. Each application sits on top of its own libraries, on top of a full guest operating system. Those guest operating systems run on top of a hypervisor, and the hypervisor sits on the host operating system and the hardware. On the right, containers. Each application sits on top of its own libraries, but all the containers share a single layer — the docker engine — which sits directly on the host's linux kernel. There is no guest operating system in the container picture. There is no hypervisor.
+
+A virtual machine virtualises the hardware, so each guest brings its own kernel, drivers, and operating system. That is heavy but very strongly isolated. A container virtualises the operating system, so each container is just a bag of processes the kernel keeps separate. That is light and fast, but the isolation is kernel-strong, not hypervisor-strong.
+
+The kernel features under the hood.
+
+Docker does not invent isolation. It composes linux features that have existed for years. Namespaces give each container its own view of process I-Ds, mounts, network, users, hostnames, and inter-process communication. Control groups, often called see groups, meter and limit how much see-pee-you, memory, input output, and process count a container can consume. Capabilities slice the all-powerful root user into roughly forty fine-grained privileges, so a container's root is not really your root. And sec-comp, app-armor, and ess-ee-linux restrict which system calls and operations the container is allowed to make.
+
+We will meet each of these properly in later notebooks. For now, just know — docker is the friendly front end on top of kernel primitives that were already there.
+
+Image versus container.
+
+Two words you will use every day, and they mean different things.
+
+An image is a frozen, read-only template. It is a snapshot of a filesystem plus a tiny bit of metadata — what command to run, what user, what environment variables. It is like a class in object-oriented programming. It does not do anything. It just sits there as a blueprint.
+
+A container is a running, or stopped, instance of an image. It is like an object — created from the class, with its own state. You can create many containers from the same image, and they each get their own writable layer on top of the image's read-only ones.
+
+A useful pair of analogies. In object-oriented programming, the image is the class and the container is the object. In cooking, the image is the recipe and the container is the actual dish you cooked. In software, the image is the installer and the container is the installed, running program.
+
+You build, or pull, an image. You run an image to create a container. You stop, start, and remove containers. Notebook two goes deep on images. Notebook three goes deep on containers. For now, just remember which word means which.
+
+Why docker matters.
+
+If you work near software today, you are standing on containers whether you know it or not.
+
+Every cloud runs them. Ay-double-you-ess elastic container service, far-gate, and elastic kubernetes service. Google cloud run and google kubernetes engine. Azure container instances and azure kubernetes service. All are container platforms. When you deploy a service in any modern cloud, you are shipping a container image.
+
+Kubernetes pods are containers. Kubernetes does not replace docker. It orchestrates containers built and packaged the way docker established. Learning docker is a prerequisite to kubernetes.
+
+Continuous integration and continuous delivery runs on containers. Github actions, gitlab see-eye, circle see-eye — each step usually runs inside a container so builds are reproducible across machines.
+
+Local development. Running docker compose up to bring up a postgres, redis, and your service for local work has replaced installing five things on your laptop for most teams.
+
+Reproducibility. The phrase "works on my machine" mostly died when teams started shipping the machine.
+
+The docker certified associate exam, often abbreviated as dee-see-ay, is the most widely-recognised docker certification, and this course is structured to take you from zero through to ready-to-sit. By notebook ten you will have hands-on familiarity with every domain the exam tests.
+
+Getting docker installed.
+
+You only learn docker by running containers. Here are the four common ways to get a working docker on your machine, ordered roughly by ease.
+
+Option one — docker desktop. This is the recommended path for laptops. It is free for personal use, paid for larger companies, and available for mac o-s, windows, and linux. Install the installer, launch the app, and you have the docker command on your path. The pros are one-click install, a graphical interface for images, containers, and volumes, and it includes docker compose plus a kubernetes toggle. The cons are licensing for big organisations, and on mac o-s and windows it secretly runs a tiny linux virtual machine because containers need a linux kernel — so file-sharing between host and container can be slow.
+
+Option two — docker engine on linux, the real thing. If you have a linux box, or a cloud virtual machine, install docker engine directly. Native, no virtual machine, the fastest experience. The pros are native performance, this is what production uses, and there is no licensing question. The cons are you need a linux host, which is harder if you are on a mac or windows laptop.
+
+Option three — colima, an open-source docker desktop alternative. For mac o-s and linux. Spins up a small lima virtual machine and runs docker engine inside it. Free, no licensing, very mac-friendly. The pros are it is free for everyone, lightweight, and has no graphical-interface overhead. The cons are it is command-line only and has slightly more setup than docker desktop.
+
+Option four — a cloud virtual machine with docker engine. Spin up a small linux virtual machine on digital ocean, ay-double-you-ess, or hetzner, and install docker engine. Ess-ess-h in to use it. The pros are it is real native linux docker, mirrors production, and you can break and rebuild freely. The cons are it costs a few dollars a month, needs an internet connection, and has slight friction to use day-to-day.
+
+For this course, docker desktop or colima is the path of least friction if you are on a laptop. A cloud virtual machine is the most authentic experience. Pick one and stick with it.
+
+Verify the install. Once docker is installed, two commands tell you it is healthy. Docker version shows the client and server versions — if you see both, the daemon is running and you can talk to it. Docker info shows the daemon's configuration — the storage driver, the logging driver, the kernel version, the number of running and stopped containers, and the default registry.
+
+Your first container.
+
+The docker equivalent of hello world is to run docker run hello world. Run that, and you will see a sequence of messages.
+
+That output is dense with information, so let us read it line by line — because every container you ever run goes through this same sequence.
+
+First, the daemon checks your local image cache for an image named hello-world with the tag latest. It is not there. So next, the daemon goes out to docker hub, which is the default registry, and downloads it. The library namespace is where official images live. Then, the image now sits in your local cache. Next time you run docker run hello-world, that download step is skipped. Finally, the daemon creates a container from that image, starts it, the container prints its message, and exits.
+
+So docker run hello-world is shorthand for — pull the image if needed, create a container, start the container, stream its output, and the container exits. Every docker run is some variation on those four steps.
+
+What got created. The container exited, but it is not gone. Docker keeps stopped containers around so you can inspect them and start them again. Two commands prove it. Docker p-s lists running containers. After hello-world exits, this shows nothing. Docker p-s dash a lists all containers, including stopped ones. You will see your hello-world container with status exited. And docker images lists local images — you will see hello-world tag latest there now. We will learn to clean these up at the end of this notebook.
+
+How docker actually works — the architecture.
+
+When you typed docker run hello-world, you used the docker command-line client — a small client program. But the client did not run the container itself. It sent a request over a unix socket to a long-running daemon. That daemon is what actually does the work.
+
+Picture four boxes stacked. At the top is the docker command-line interface — the one you type in your terminal. It sends rest-ay-pee-eye requests over the socket at slash var slash run slash docker dot sock. The next box down is docker-d, the docker daemon. The brain. It manages images, networks, and volumes. Below the daemon is container-d, which is the container runtime supervisor — it tracks the state of containers and handles image pulling at the low level. And at the bottom is run-see, the thing that actually creates the namespaces, mounts the root filesystem, sets up control groups, and exec-s your container's process.
+
+Four moving parts. Docker, the command-line interface you type. Stateless. It just packages your command as an h-t-t-p request. Docker-d, the docker daemon. The brain. It owns the image cache, the container metadata, networks, and volumes. It listens on slash var slash run slash docker dot sock by default. Container-d, the container runtime supervisor. It tracks the state of containers, handles image pulling at the low level, and talks to run-see to actually start things. Container-d was donated by docker to the cloud native computing foundation, and is used by kubernetes too. And run-see, the thing that actually creates the namespaces, mounts the root filesystem, sets up control groups, and exec-s your container's process. Tiny, open container initiative conformant, also a cloud native computing foundation project.
+
+Why does this matter. Two reasons. First, when something goes wrong, you will often need to know which layer to look at. "The daemon is not running" is docker-d. "A container is stuck" might be container-d or run-see. Notebook ten covers the troubleshooting flow. Second, the client-daemon separation means you can point your local docker command-line client at a remote daemon — for example on a server — by setting the docker host environment variable. That is how continuous-integration systems run builds on beefier hosts.
+
+Anatomy of a docker command.
+
+Modern docker organises commands by object, then verb. Docker, then the object — like container, image, volume, or network — then the verb — like list, run, pull, or create — then any flags, then any arguments.
+
+Examples. Docker container list lists containers. Docker container run n-ginx runs a container from the n-ginx image. Docker image pull ubuntu tag twenty-four point oh-four pulls an image. Docker image list lists images. Docker volume create data creates a volume. And docker network list lists networks.
+
+The full set of objects includes container, image, volume, network, system, builder, build-x, compose, context, plugin, secret, service, stack, swarm, and trust. You will meet each one in later notebooks.
+
+The short aliases, sometimes called the legacy top-level commands. For the most-used objects, docker keeps short top-level aliases. These do the same thing and are what you will see in most blog posts. Docker container run becomes docker run. Docker container list becomes docker p-s. Docker container stop becomes docker stop. Docker container remove becomes docker remove. Docker image list becomes docker images. Docker image pull becomes docker pull. Docker image build becomes docker build. And docker image remove becomes docker remove-image.
+
+Use whichever feels natural. The long form is more discoverable — docker container help lists everything you can do to a container. The short form is faster to type. We will mix both in this course.
+
+The core container lifecycle.
+
+A container has a small handful of states, and a handful of commands to move it between them. Picture this. An image, then docker create produces a container in the created state. Docker start moves it into the running state. From running, docker stop sends a signal called sig-term, waits a grace period, and if the container has not exited, sends sig-kill. That moves it to the stopped state. From stopped, docker start brings it back to running, or docker remove deletes it for good. Docker run is the everyday shortcut that does create and start in one step.
+
+The everyday commands. Docker run image — create and start in one step. The ninety percent case. Docker p-s — list running containers. Add dash a to include stopped ones, and dash q to print just I-Ds, which is useful in pipelines such as docker remove of docker p-s dash a-q. Docker stop name — politely stop a container. Sends sig-term, waits ten seconds, then sig-kill. Use dash-dash time to change the grace period. Docker start name — start a stopped container again. Keeps its writable layer, so any files it wrote are still there. Docker restart name — stop, then start, in one command. Docker kill name — immediate sig-kill, no grace period. The "I mean it" button. Docker remove name — delete a stopped container. Add dash f to force-remove a running one. And docker logs name — show what the container wrote to standard output and standard error. Add dash f to follow, like tail dash f.
+
+Containers can be referred to by name — using the name flag when you run, or the auto-generated name like frosty einstein — or by I-D, the hex string, where the first few characters are usually enough to be unique. Pick names when you will talk to the container often. Let docker auto-name throwaways.
+
+Important flags for docker run.
+
+You will see these constantly. We will deepen them in notebook three, but meet them now. The detached flag, dash d, runs in the background. Without it, the container takes over your terminal until it exits. The name flag assigns a stable name. Without it, docker auto-generates one like priceless borg. The publish flag, dash p, with the syntax host port colon container port, maps a host port to a container port. So dash p eighty-eighty colon eighty exposes the container's port eighty as host port eighty-eighty. We unpack this in notebook five. The volume flag, dash v, mounts a volume or host directory into the container. That is notebook four. The environment flag, dash e key equals value, sets an environment variable inside the container. The remove flag, dash-dash r-m, auto-removes the container when it exits. Great for short-lived tasks so you do not accumulate exited containers. Dash i-t combines dash i, which keeps standard input open, and dash t, which allocates a t-t-y. The standard combo for interactive containers, such as docker run dash i-t ubuntu bash. And the restart flag controls what to do when the container exits. The options are no, which is the default, on-failure, always, and unless-stopped.
+
+Try an interactive shell in an ubuntu container. Run docker run dash i-t dash-dash r-m ubuntu tag twenty-four oh-four bash. Then inside, cat slash e-t-c slash o-s release, then exit. The remove flag cleans it up when you exit. Without the remove flag, you would accumulate dead ubuntu containers.
+
+Container exit codes.
+
+When a container exits, it has an exit code — the standard unix convention. Zero means success. Anything else is a failure. You can see it in docker p-s dash a under the status column, for example exited with code one-three-seven five seconds ago. Or you can pull it out explicitly.
+
+A few exit codes you will see often. Zero is a clean exit, success. One is a generic application error. One-two-five means the docker run command itself failed — for example a bad flag — and the container never started. One-two-six means the container command was found but is not executable. One-two-seven means the container command was not found at all. One-three-zero means the process was killed by sig-int — that is control-c, signal number two, plus the one-two-eight offset. One-three-seven means the process was killed by sig-kill — signal nine plus one-two-eight. Often this means out-of-memory or someone ran docker kill. And one-four-three means the process was killed by sig-term — signal fifteen plus one-two-eight. That is what a clean docker stop looks like to the process.
+
+The one-twenty-eight plus signal convention is linux, not docker — but docker surfaces it faithfully, so it is worth memorising the one-thirty-seven for kill and one-forty-three for graceful stop sightings.
+
+Getting help.
+
+You will not memorise every flag of every command. You do not need to. Docker has excellent built-in help.
+
+Docker dash-dash help is the top-level command list. Docker object dash-dash help lists every verb for that object — for example docker container dash-dash help. Docker object verb dash-dash help shows every flag of a specific command. For example, docker run dash-dash help is the single most-read help page in docker. And docker help command is the same as dash-dash help, slightly older spelling.
+
+For deeper docs. The official reference at docs dot docker dot com. The command-line section is searchable and current. Image-specific docs — every official image on docker hub has a read-me explaining its tags, environment variables, and volumes. Hub dot docker dot com slash underscore slash postgres is a model example. And man docker, on linux installs, has manpages available too sometimes.
+
+The flow when you are stuck. Try command dash-dash help first. It is instant and you will usually find the flag. Then the docs site for tutorials and conceptual explanations.
+
+Cleaning up.
+
+A few hours into docker and you will have dozens of exited containers and old images sitting around. Two ways to clean. Targeted — docker remove name-or-I-D for one container, docker remove-image image for one image. Or bulk — docker system prune removes all stopped containers, dangling images, which are untagged orphans, and unused networks in one go. Add dash a to also remove all unused images, not just dangling ones. Add dash-dash volumes to also nuke volumes. Careful — that is data.
+
+The three levels of prune. Docker system prune, the safe-ish one. Docker system prune dash a, more aggressive — also removes all unused images. And docker system prune dash a dash-dash volumes, the nuclear option — also wipes unused volumes, with a data loss risk.
+
+To see what is taking space, run docker system d-f. Like the d-f command, but for docker — it shows space used by images, containers, and volumes.

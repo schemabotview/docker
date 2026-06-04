@@ -1,0 +1,145 @@
+Storage, volumes, and bind mounts.
+
+What is covered. This notebook is the deep dive on persisting data in docker. Why the container filesystem is not enough — the writable layer is fast but ephemeral. The three mount types — volume, bind mount, and t-m-p-f-s — and when to reach for each. Named volumes — docker volume create, the lifecycle, and the dash v with name colon path syntax. Anonymous volumes and the volume instruction in dockerfile — the implicit volumes you did not ask for. Bind mounts — host paths into containers, the local development workhorse, and the gotchas. T-m-p-f-s — ram-backed mounts for caches, secrets, and scratch. The dash v short form versus the mount long form, and the modern preferred syntax. Volume drivers — local by default, n-f-s, and third-party plugins. Sharing volumes between containers, with volumes-from and multiple readers or writers. The mac and windows file-sync caveat — why volumes are way faster than bind mounts on docker desktop. Backup, restore, and migrate — moving volume data with tar and helper containers. User-I-D and group-I-D gotchas — permission-denied errors and the standard fixes. And where data actually lives on disk — the slash var slash lib slash docker slash volumes layout.
+
+By the end you should know exactly which mount type to use for any scenario, how to back up a database volume, and why your mac is slow when you bind-mount your source tree.
+
+Why the container filesystem is not enough.
+
+Recall the layer stack from notebook two. The container's writable layer sits on top of the read-only image layers. When the container's process writes to its own filesystem — say, a postgres container writing to slash var slash lib slash postgres-q-l slash data — those writes land in the writable layer. That works, but it has three problems.
+
+First, it is ephemeral. Docker remove deletes the container, and the writable layer goes with it. Your database disappears. Second, it is not shareable. Two containers cannot see each other's writable layers. So you cannot easily have a sidecar reading another container's logs. Third, it is slow for heavy writes. The union filesystem, overlay-two, does copy-up on first write. That is fine for occasional file changes but expensive for write-heavy workloads like databases.
+
+The fix is to take a path inside the container and mount something else there — something that lives outside the container's writable layer and survives the container's lifecycle.
+
+Docker has three flavours of mount.
+
+The three mount types.
+
+A volume lives in a docker-managed area at slash var slash lib slash docker slash volumes. Its lifecycle is independent of any container. You delete it explicitly with docker volume remove. Best for persistent app data — database files, app uploads, anything that should outlive a container.
+
+A bind mount lives at an arbitrary path on the host filesystem. Its lifecycle is the host path's lifecycle — docker never touches it. Best for local development, where you mount your source code in, plus configuration files and host log forwarding.
+
+A t-m-p-f-s mount lives in ram on the host. Its lifecycle is the container only — gone when the container stops. Best for sensitive scratch — do not write secrets to disk — and high-throughput caches.
+
+The mental rule. Use a volume by default. Use a bind mount when you need a specific path on the host. Use t-m-p-f-s when the data should never hit disk.
+
+The rest of this notebook unpacks each one.
+
+Named volumes — the default choice.
+
+A named volume is a piece of storage managed entirely by docker. You give it a name, docker decides where on disk it lives, and you mount it into containers by name.
+
+Create, list, inspect, remove. Docker volume create p-g-data. Docker volume list. Docker volume inspect p-g-data. Docker volume remove p-g-data. Docker volume inspect shows the mount-point on the host, for example slash var slash lib slash docker slash volumes slash p-g-data slash underscore data. It also shows the driver — local by default — labels, and creation date.
+
+Mount it into a container with the short form using dash v. Docker run dash d dash-dash name d-b, dash v p-g-data colon slash var slash lib slash postgres-q-l slash data, dash e postgres-password equals secret, then postgres tag sixteen. The dash v syntax — source colon destination — reads "mount the named volume p-g-data at slash var slash lib slash postgres-q-l slash data inside the container." Docker auto-creates p-g-data if it does not exist yet. That is a convenient default. But the explicit docker volume create is what production scripts do.
+
+Docker remove d-b later does not touch p-g-data. Spin up a new postgres container with the same mount, and your data is still there.
+
+When volumes mount over a non-empty container path. A gotcha worth knowing. If the container path already had files in the image — for example, slash var slash lib slash postgres-q-l slash data has the empty postgres data directory baked in — and the volume is empty on first mount, docker copies the image's contents into the volume before mounting. Subsequent mounts do not re-copy. This is what lets docker run dash v p-g-data colon slash var slash lib slash postgres-q-l slash data postgres tag sixteen "just work" — the first run seeds the volume with the freshly initialised data directory. Later runs preserve whatever postgres has written.
+
+This does not happen for bind mounts. A bind mount unconditionally hides whatever was at the container path.
+
+Anonymous volumes and the volume instruction.
+
+Two ways to get a volume without explicitly naming it. Both can surprise you.
+
+Anonymous volumes from dash v. If you write dash v just a container path, with no source, docker creates an anonymous volume — a volume with a random hex name — and mounts it there. For example, docker run dash d dash v slash var slash lib slash my-s-q-l my-s-q-l tag eight. Then docker volume list shows something like nine-f-six-a-three-b — random.
+
+These accumulate forever unless you use the docker run remove flag, which deletes anonymous volumes with the container, or docker volume prune, which removes anonymous volumes not currently in use.
+
+The volume instruction in a dockerfile. The volume instruction declares that a path will be a volume. For example, from postgres tag sixteen, then volume slash var slash lib slash postgres-q-l slash data. When you docker run this image without specifying a mount for that path, docker creates an anonymous volume and mounts it there automatically. The intent is "this path must not be on the writable layer. Data here should persist." It is how postgres, my-s-q-l, mongo, and most database official images protect users from accidentally putting their database on the throwaway writable layer.
+
+Two gotchas. First, you will accrue orphan anonymous volumes if you do not pass dash v name for these paths, and do not use the remove flag. Docker volume prune is the cleanup. Second, the volume instruction is sticky. Once declared in an image, you cannot easily un-declare it in a derived image. Avoid the volume instruction in your own dockerfiles unless you genuinely need it. Let the user, or compose file, decide on mounts.
+
+Bind mounts — host paths into containers.
+
+A bind mount maps a path on your host directly into a container. No docker-managed storage, no copying. The container sees the host's bytes. For example, docker run dash d dash-dash name web, dash v slash home slash me slash projects slash site colon slash you-ess-are slash share slash n-ginx slash h-t-m-l colon r-o, then n-ginx alpine. This serves slash home slash me slash projects slash site from the host as n-ginx's web root. Edit a file on the host, refresh the browser, you see the change. The colon r-o makes the mount read-only inside the container — a good default. The web server should not be writing to your source tree.
+
+The classic dev workflow. Bind mounts are the local-development workhorse. The pattern. First, have your source code on the host, where your editor and git live. Second, run the app inside a container with the source bind-mounted. Third, either restart the container on each change, or use a hot-reloading runtime — node-mon, flask reload, you-vee-corn reload.
+
+Trade-off. Bind mounts hardcode the host path. The same docker run command will not work on a teammate's machine unless their paths match. Which is why production deploys use volumes, not binds, and compose files use relative paths that resolve against the project root.
+
+Gotchas. No image-content copy. Unlike volumes, a bind mount silently masks whatever was at the container path. Mount your empty dot slash s-r-c over slash app, and slash app's previous contents become invisible to the container. The host path must exist — if slash home slash me slash projects slash site does not exist, docker creates it as an empty directory on linux. That is almost never what you wanted. Typo in path, mysteriously empty container. Permissions can confuse. The container sees the host's user-I-Ds and group-I-Ds literally. We dig into this below. Performance on mac and windows. Docker desktop has to bridge host filesystem events into a linux virtual machine. Bind mounts of large directories — think a node-modules with two-hundred thousand files — can be brutally slow. The fix is usually a named volume for node-modules, plus a bind mount for source.
+
+T-m-p-f-s — ram-backed mounts.
+
+A t-m-p-f-s mount is a chunk of host ram that the container sees as a filesystem at a chosen path. Nothing on disk. Data vanishes when the container stops. For example, docker run dash-dash t-m-p-f-s slash t-m-p comma size equals sixty-four-m comma mode equals seventeen-seventy-seven alpine s-h.
+
+What it is good for. High-throughput scratch. Build steps, compilers, redis dumps — anything that wants a fast filesystem and does not need to survive. Secrets you do not want on disk. Mount t-m-p-f-s at slash run slash secrets and write tokens there. The host's disk never touches them. Read-only containers that need some writable space. Pair dash-dash read-only, which makes the root filesystem read-only, with dash-dash t-m-p-f-s slash t-m-p and dash-dash t-m-p-f-s slash var slash run, so processes that insist on writing to specific paths have somewhere to go.
+
+Dash-dash t-m-p-f-s is the short syntax. The long form via dash-dash mount type equals t-m-p-f-s accepts more options.
+
+Dash v short form versus dash-dash mount long form.
+
+Docker has two ways to spell a mount. They mostly do the same thing.
+
+Dash v, short and terse. The syntax is dash v source colon destination, with an optional options list. Source is a volume name, an absolute host path which is a bind mount, or omitted, which is an anonymous volume. Options is a comma-separated list — r-o, r-w, z, capital Z, cached, delegated, and so on. Examples. Dash v p-g-data colon slash var slash lib slash postgres-q-l slash data. Dash v slash host slash s-r-c colon slash app slash s-r-c colon r-o. Dash v slash e-t-c slash lets-encrypt colon slash e-t-c slash lets-encrypt colon r-o.
+
+Dash-dash mount, long and explicit. The syntax is dash-dash mount type equals volume, bind, or t-m-p-f-s, then source equals, target equals, readonly, and so on. Examples. Dash-dash mount type equals volume comma source equals p-g-data comma target equals slash var slash lib slash postgres-q-l slash data. Dash-dash mount type equals bind comma source equals slash host slash s-r-c comma target equals slash app slash s-r-c comma readonly. Dash-dash mount type equals t-m-p-f-s comma target equals slash scratch comma t-m-p-f-s-size equals sixty-four-m.
+
+The trade-offs. Dash v is shorter, but ambiguous. Dash v foo colon slash data is a volume named foo. Dash v slash foo colon slash data is a bind mount of slash foo. A typo turns one into the other and you do not notice until data goes the wrong place. Dash-dash mount is verbose, but unambiguous. You say type equals volume, or type equals bind, explicitly. The docker docs recommend dash-dash mount for new code.
+
+In compose files, in notebook six, you will see both — short volumes strings, dash-v style, and long volumes mappings, dash-dash mount style. Use whichever your team has already standardised on. Lean to dash-dash mount for scripts and continuous integration.
+
+Volume drivers.
+
+Every volume has a driver — the plugin that actually stores the bytes. The default is local, which means a directory on this host's filesystem at slash var slash lib slash docker slash volumes slash name slash underscore data.
+
+You can pick a different driver at creation time. For example, docker volume create dash-dash driver local dash-dash opt type equals n-f-s dash-dash opt o equals address equals one-nine-two dot one-six-eight dot one dot ten comma r-w dash-dash opt device equals colon slash exports slash data my-vol.
+
+The most common non-default driver is local with options for n-f-s or t-m-p-f-s, which lets you mount a network share or a ram disk as a docker volume. Third-party plugins — docker plugin install — extend the list to cloud block storage like ay-double-you-ess elastic block store via the rex-ray e-b-s plugin, or google cloud persistent disk. Distributed filesystems like gluster-f-s and ceph. Object storage shims like s-three via s-three-f-s as a plugin.
+
+For a single-host docker installation, the default local driver is what ninety-five percent of teams use. Drivers really matter when you get to multi-host orchestrators. Kubernetes has its own container storage interface ecosystem. Swarm uses docker volume drivers directly to share state across nodes.
+
+Sharing volumes between containers.
+
+Two ways to make multiple containers see the same data.
+
+Mount the same volume in each — the modern way. Docker volume create shared. Then docker run dash d dash-dash name producer dash v shared colon slash out alpine s-h dash c, a loop that appends date to slash out slash log every second. Then docker run dash-dash r-m dash v shared colon slash in alpine, cat slash in slash log. The volume is the source of truth. Each container mounts it where it likes. Standard. Recommended.
+
+The legacy way is volumes-from. Docker run dash d dash-dash name data alpine s-h dash c sleep infinity. Then docker run dash-dash volumes-from data dash v shared colon slash out. Volumes-from container copies all of container's mounts into the new container at the same paths. Used a lot in the old "data container" pattern, where you would create a stopped container just to own a volume. Today, the volume itself is a first-class object, so volumes-from is mostly a relic. Recognise it in legacy compose and swarm setups. Do not reach for it in new code.
+
+Concurrent writers — be careful. Two containers writing to the same volume at the same time can corrupt data, unless the application layer coordinates. Postgres will not let you point two postgres containers at the same data directory. S-q-lite has well-known issues with multiple writers. Volumes do not add locking. They are just shared bytes.
+
+The mac and windows file-sync caveat.
+
+On linux, containers and the host share the kernel, so bind mounts are essentially free. The container sees the host's inode directly. On mac o-s and windows, docker runs a hidden linux virtual machine, and the host's filesystem has to be bridged into it.
+
+That bridge is slow. An n-p-m install against node-modules bind-mounted from mac o-s can be five to ten times slower than the same on a native linux host. Same story for any directory with thousands of small files.
+
+Three mitigations, in order of preference. First, use volumes for hot directories. Put node-modules, dot cache slash pip, target for rust, and so on, in named volumes, not bind mounts. Bind-mount only the source files you actually edit. This is the most common production-quality pattern. Second, use the cached or delegated consistency options on bind mounts. For example, dash v dot slash s-r-c colon slash app slash s-r-c colon cached. These relax read-after-write consistency between host and container for a big speed win. Cached favours host writes. Delegated favours container writes. On modern docker desktop with g-r-p-c fuse or virt-io-f-s, these are partially deprecated but still accepted. Third, use mu-tagen-compose or docker-sync for one-way replication between host and a fast in-virtual-machine directory. Heavier setup. Only worth it for very large source trees.
+
+If you take nothing else from this section — do not bind-mount node-modules on a mac. Use a named volume.
+
+Backup, restore, migrate.
+
+Volumes are owned by the daemon, so you cannot just c-p dash r them. They are not always in a stable location, and on docker desktop they are inside the virtual machine. The standard pattern is a helper container.
+
+Backup a volume to a tarball on the host. Docker run dash-dash r-m, dash v p-g-data colon slash data colon r-o, dash v dollar-paren p-w-d close-paren colon slash backup, alpine, tar c-z-f slash backup slash p-g-data dot tar dot g-z, dash capital C slash data, dot. Read the volume read-only on slash data. Bind-mount the current directory on slash backup. Tar the volume contents to slash backup slash p-g-data dot tar dot g-z. Result — p-g-data dot tar dot g-z in your shell's working directory.
+
+Restore from the tarball. Docker volume create p-g-data-restored. Then docker run dash-dash r-m, dash v p-g-data-restored colon slash data, dash v dollar-paren p-w-d close-paren colon slash backup, alpine, tar x-z-f slash backup slash p-g-data dot tar dot g-z dash capital C slash data. Then docker run dash v p-g-data-restored colon slash var slash lib slash postgres-q-l slash data postgres tag sixteen to use it.
+
+Migrate between hosts. Backup to tar on host A, secure-copy the tar to host B, restore on host B. The same pattern works for moving a volume between docker desktop and a linux server.
+
+Database-aware backups. For production databases, do not tar live data files. You can catch them mid-write and corrupt the backup. Use the database's own dump tool. For example, docker exec d-b p-g dump dash capital U postgres my-d-b, redirect to my-d-b dot s-q-l. Tar of the volume is fine for stopped databases, or for non-database data.
+
+User-I-D and group-I-D gotchas.
+
+The single most common bind-mount frustration. I bind-mounted my project, the container cannot write to it. Or, the files the container creates are owned by root on my host.
+
+Why. A container's processes run with some user-I-D inside the namespace. By default that user-I-D is whatever the image's user instruction sets — often zero, which is root, or sometimes a specific user-I-D like one-thousand or nine-ninety-nine. When that process writes to a bind-mounted host path, the host sees the write as being done by that same numeric user-I-D — because by default docker does not remap user-I-Ds. User-namespace remapping is opt-in, in notebook eight.
+
+So if your container runs as user-I-D zero, root, and writes slash app slash output dot t-x-t, the file on your host is owned by root colon root. If it runs as user-I-D nine-ninety-nine — which is postgres inside the postgres image — the file's owned by nine-ninety-nine colon nine-ninety-nine on the host. Likely some random local user with that user-I-D, or nobody.
+
+The standard fixes. Match user-I-Ds. Either build the image to run as your host user-I-D — docker run dash u of i-d dash u colon i-d dash g — or have the image's user already match your host. This is what dev-container scripts often do. Pre-create the host directory with permissive ownership — make-directory dash p dot slash data and-and change-mode seven-seven-seven dot slash data — for dev environments. Not for production. For volumes, not bind mounts, let docker manage user-I-Ds. Volume directories are owned by root on the host, but the container's user can usually still change owner or change mode them on first mount, via the image's entry-point script. This is why most database images "just work" with volumes but fight you when you bind-mount. And use docker desktop's auto user-I-D translation. On mac o-s and windows, docker desktop transparently maps host owner to container owner for bind mounts. This is one reason bind-mounting on desktop "feels normal" — but the abstraction leaks under load.
+
+Where data actually lives.
+
+For curiosity and for troubleshooting, here is the on-disk layout on a typical linux docker installation.
+
+At slash var slash lib slash docker, you have overlay-two for image and container layer data — each layer-I-D subdirectory has a diff folder with the actual files for that layer, a link file, a lower file with pointers to parent layers, and a work folder. Then volumes, with one subdirectory per named volume, each containing an underscore-data folder where the volume's contents live, plus an opts dot j-son. Then containers, with one subdirectory per container holding config dot v-two dot j-son, host-config dot j-son, and the j-son log file the default logging driver writes. Then image, for image metadata, manifests, and configs. Network, for network state. And plugins, for installed plugins.
+
+A few troubleshooting moves that use this knowledge. Free up disk — docker system d-f dash v shows the breakdown. Disk usage of slash var slash lib slash docker slash overlay-two reveals fat layers. Docker system prune deletes unused. Find a volume's contents from the host — docker volume inspect name with format of dot mountpoint, then list that path. Read a stopped container's logs without docker logs — tail slash var slash lib slash docker slash containers slash i-d slash i-d j-son log directly.
+
+On mac o-s and windows, these paths are inside the docker desktop virtual machine, not on your mac or p-c's filesystem. You cannot list slash var slash lib slash docker from your shell — only inside containers. Docker desktop's settings panel exposes the virtual machine's disk usage in lieu of direct access.

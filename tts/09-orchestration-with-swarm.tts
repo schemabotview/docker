@@ -1,0 +1,185 @@
+Orchestration with swarm.
+
+What is covered. This notebook is the deep dive on docker swarm. Why orchestration — the wall single-host docker and compose hits, and what an orchestrator does for you. Swarm versus kubernetes — what each is good at, and why this notebook covers swarm. Swarm architecture — managers, workers, the raft consensus log, and the gossip plane. Initialising a cluster — docker swarm init, docker swarm join, manager and worker tokens. Services, not containers — the orchestrator's unit of work, replicated versus global mode. The service lifecycle — create, list, p-s, inspect, update, scale, rollback, and remove. Rolling updates — update-parallelism, update-delay, update-failure-action. Overlay networks revisited — multi-host networking, and swarm-attachable networks. The ingress network and routing mesh — how a single published port reaches the right replica on any node. Stacks — docker stack deploy and the compose-flavoured stack file. Service discovery and d-n-s — virtual eye-pees and d-n-s round-robin. Swarm secrets and configs — encrypted-at-rest credentials and mounted configuration files. Placement — constraints, preferences, labels, max replicas per node. Node management — drain, pause, active, promote, demote, taking nodes down for maintenance. And the realities — when swarm is the right answer today, and when kubernetes is.
+
+By the end you should be able to bootstrap a three-node swarm, deploy a multi-service stack across it, roll it forward and back without downtime, and drain a node for maintenance — all from a single command-line client.
+
+Why orchestration.
+
+Compose got us to a multi-container app on one host. That is already useful, but it hits a wall. What if one host is not enough capacity. What happens if that host dies. Compose has no answer — your stack is down until you rebuild the host. How do you do a rolling deploy without taking traffic offline. How do you keep secrets off disk on every machine that runs the service. How do you have services on different hosts talk to each other by hostname.
+
+An orchestrator answers all five. It manages a pool of hosts, called a cluster, accepts a desired state — "I want three replicas of this service everywhere" — and continuously reconciles reality to that state. A node dies. The orchestrator launches replacement replicas elsewhere. A new image is deployed. Replicas roll forward one at a time. A service publishes a port. The orchestrator routes traffic to whichever node has a healthy replica.
+
+Two orchestrators matter for the docker world — docker swarm, built into docker, simpler, what the dee-see-ay exam tests. And kubernetes, more powerful, more complex, the industry default for non-trivial production.
+
+Swarm versus kubernetes.
+
+Installation. Swarm — docker swarm init, one command, zero extra software. Kubernetes — koob-ay-d-m, managed services like e-k-s, g-k-e, and a-k-s, or five-plus binaries. Non-trivial. Command-line client. Swarm uses docker, the same client you already know. Kubernetes uses koob-ee-c-t-l, an entirely separate model. Concepts. Swarm has service, task, stack, secret, config. Kubernetes has pod, deployment, replica-set, service, ingress, config-map, secret, persistent volume, persistent volume claim, stateful-set, daemon-set, job, cron-job, namespace, r-b-a-c, network-policy, custom resource definitions, and more. Networking. Swarm — built-in overlay, routing mesh, simple. Kubernetes — container-network-interface plugins. Networking is your choice — calico, cilium, others. Storage. Swarm — local volumes plus third-party drivers. Kubernetes — the container-storage-interface ecosystem, cloud-native storage. Updates. Swarm — rolling, with rollback. Kubernetes — rolling, blue-green, canary, with controllers for everything. Ecosystem. Swarm — small, mostly docker-shipped. Kubernetes — vast, including helm, operators, service meshes, git-ops tools. Multi-cluster or federation. Swarm — none. Kubernetes — several solutions, all complicated. Pace of development. Swarm — mature, mostly stable. Kubernetes — rapidly evolving.
+
+Both run open-container-initiative images. The image you built in notebook two deploys identically on either.
+
+Swarm is the right answer when. You want orchestration without the kubernetes complexity tax. Small teams, edge or internet-of-things clusters, simple production setups, learning orchestration concepts. The dee-see-ay exam tests swarm. Kubernetes is out of scope.
+
+Kubernetes is the right answer when. You need its ecosystem — operators, service meshes, git-ops. Or you are going multi-cluster. Or you are hiring at scale — the talent pool knows kubernetes. Most large companies are on kubernetes today.
+
+Despite the industry trend, learning swarm is not wasted time. The concepts — declarative state, rolling updates, secrets, placement — carry over directly. Kubernetes is "swarm but bigger, harder, with more knobs." Start here.
+
+Swarm architecture.
+
+A swarm cluster is a set of docker hosts, called nodes, talking to each other. Each node plays one of two roles.
+
+A manager runs the orchestrator's control plane. Accepts a-p-i calls like docker service create. Schedules tasks. Stores cluster state. Managers also run workloads by default. You can prevent this.
+
+A worker runs containers, called tasks in swarm vocabulary, assigned by managers. Does not participate in control plane decisions.
+
+You can have one, three, five, or seven managers — always odd, for raft quorum. The cluster tolerates N minus one over two manager failures. Three managers tolerate one loss. Five tolerate two. One worker count is unlimited.
+
+Picture this. Three manager nodes in a row, with manager one as leader, communicating via raft. A row of worker nodes below — worker one, worker two, worker three.
+
+Three protocols glue the cluster together. Raft — a leader-election plus log-replication protocol among managers. The leader writes cluster state — services, tasks, secrets, networks — to a replicated raft log. Reads are cheap. Writes go through the leader. Gossip — a peer-to-peer protocol every node speaks. Tells everyone "service web has tasks on nodes A, C, D, at these eye-pees." Used for service discovery and overlay-network membership. And the docker a-p-i — managers expose the same rest a-p-i the daemon does, just with extra swarm verbs — service, node, stack, secret, config, network with overlay driver.
+
+Initialising a cluster.
+
+On the machine that will be your first manager, run docker swarm init dash-dash advertise-address, then this machine's eye-pee.
+
+That single command turns the local docker daemon into a swarm manager. Generates two join tokens — one for additional managers, one for workers. Initialises the raft log with this node as leader. Creates the default overlay network, called ingress. And prints the worker-join command, ready to paste on another machine.
+
+You will see something like "to add a worker to this swarm, run the following command — docker swarm join dash-dash token s-w-m-t-k-n one dash and a long token, then the manager eye-pee colon two-three-seven-seven."
+
+On each additional node, for a worker, paste the worker join command. For another manager, re-print the manager token on the existing manager with docker swarm join-token manager, and paste the resulting command.
+
+To re-print tokens later. Docker swarm join-token worker. Docker swarm join-token manager. Docker swarm join-token dash-dash rotate manager — invalidate old token, issue new.
+
+The cluster runs on port two-three-seven-seven, cluster management, t-c-p. Port seven-nine-four-six, gossip, t-c-p and u-d-p. And port four-seven-eight-nine, overlay data, u-d-p. Open those between nodes.
+
+Run docker node list to see all nodes. The star marks the one you are on.
+
+Services, not containers.
+
+The swarm primitive is not a container. It is a service. A service is a declaration — "I want N replicas of image X running across the cluster, with these networks, secrets, environment variables, resources, and update policy. Make it so."
+
+The orchestrator decomposes a service into tasks — one per replica — schedules tasks onto nodes, and creates containers to run them. The container is just an implementation detail.
+
+For example, docker service create dash-dash replicas three dash-dash name web dash p eighty-eighty colon eighty n-ginx alpine. Docker service list shows mode replicated, replicas three-of-three, image n-ginx alpine, port eighty-eighty mapped to eighty. Docker service p-s web shows the individual tasks and which nodes they are on.
+
+If one of those nodes crashes, the manager notices, re-schedules its task elsewhere, and replicas three-of-three is restored automatically.
+
+Two service modes. Replicated is the default — N tasks, scheduler picks where. The ninety percent case. Global is exactly one task per node. Used for per-node sidecars — log shippers, monitoring agents, security tools. For example, docker service create dash-dash mode global dash-dash name node-exporter prom slash node-exporter. Docker service p-s node-exporter will show one task per node, automatically growing if you join more nodes.
+
+The service lifecycle.
+
+The swarm equivalents of the docker run, stop, and so on commands work at the service level.
+
+Docker service create, then flags, then image, then optional command — create a new service. Most docker run flags apply — dash p, dash e, dash v, dash-dash mount, dash-dash user — plus swarm-specific ones. Docker service list shows services with desired versus running replicas. Docker service p-s, then a service, shows tasks in this service, with node placement and status. Docker service inspect, then a service, shows the full j-son definition. Add dash-dash pretty for human-readable. Docker service logs dash f, then a service, gives aggregated logs from every task in the service. Docker service update, then flags, then a service — changes a service's definition, like image, replicas, environment, networks. Triggers a rolling update. Docker service scale service equals N is a shortcut for update dash-dash replicas. Docker service rollback service reverts the last update. And docker service remove service deletes the service. All its tasks and containers go away.
+
+Two important conceptual shifts from single-host docker. First, you do not stop or start a service. You scale it to zero to stop it. It will come back to N on the next scale-up. You remove it to remove. Second, you do not restart a container manually. If a task dies, the orchestrator replaces it. Manual intervention is for code or configuration changes, not "kick the tires."
+
+Rolling updates and rollback.
+
+A service update is one of the most common day-to-day swarm operations. The default behaviour is — docker service update dash-dash image my-org slash a-p-i tag one point two point four a-p-i. Swarm updates one task at a time — stop one old task, start one new task, wait for it to be ready, move to the next. Default delay between batches is zero. Batch size is one.
+
+Tune with several flags. Update-parallelism N updates N tasks at a time. Update-delay ten-s pauses this long between batches. Update-monitor thirty-s — after starting a new task, watch it for this long before considering it successful. Catches "starts fine, crashes after twenty seconds" bugs. Update-max-failure-ratio zero point two aborts if more than twenty percent of tasks fail their monitor window. Update-failure-action rollback — on abort, automatically revert to the previous image. Other options are continue and pause.
+
+These can also be set at service creation, so they apply to future updates without re-specifying — for example, docker service create dash-dash update-parallelism two dash-dash update-delay ten-s dash-dash update-failure-action rollback dash-dash name a-p-i my-org slash a-p-i tag one point two point three.
+
+Manual rollback. If something went wrong, docker service rollback a-p-i. This reverts to the previous spec. Swarm keeps the previous one revision in history. Configurable via rollback flags symmetric to update flags.
+
+Overlay networks revisited.
+
+Notebook five introduced overlay networks as the multi-host bridge. In swarm they are how every service communicates across nodes. Docker network create dash-dash driver overlay dash-dash attachable app-net.
+
+Driver overlay is required for multi-host. Attachable allows standalone containers, not just swarm services, to join. Optional but commonly useful for debugging.
+
+An overlay uses v-x-l-a-n under the hood. Each packet between containers on different hosts is wrapped in a u-d-p datagram that traverses port four-seven-eight-nine between nodes. To the containers it looks like a flat local-area network.
+
+For example, docker service create dash-dash network app-net dash-dash name a-p-i my-org slash a-p-i. Docker service create dash-dash network app-net dash-dash name web dash-dash publish eighty-eighty colon eighty my-org slash web. Web and a-p-i are now on the same logical network. Web reaches a-p-i by service name — h-t-t-p colon slash slash a-p-i. Swarm runs the embedded d-n-s resolver from notebook five, but cluster-wide.
+
+Two important nuances. Tasks of the same service share a virtual eye-pee. A-p-i resolves to a single virtual eye-pee. The kernel's eye-p-v-s load-balances connections across all healthy a-p-i tasks, regardless of which node they are on. And encryption is opt-in. Add dash-dash opt encrypted to encrypt traffic between nodes on this network using eye-p-sec. On by default for the ingress network.
+
+The ingress network and routing mesh.
+
+A killer swarm feature, hidden behind a benign-looking flag.
+
+When a service publishes a port — docker service create dash p eighty-eighty colon eighty — swarm puts that port on every node in the cluster. Even nodes that are not running a replica of the service. A request hitting any node colon port reaches a healthy replica somewhere, even if that node hosts no replicas itself.
+
+The mechanism. First, the node receives the packet on its eighty-eighty. Second, the kernel's eye-p-v-s, configured by swarm, picks a healthy task eye-pee, across the cluster. Third, the packet is routed, over the encrypted ingress overlay, to the chosen task's node. Fourth, that node delivers to the local container.
+
+Picture this. The internet sends a request to node A on eighty-eighty. The routing mesh forwards it to a task running on node C. The internet sends another to node B on eighty-eighty. Routed to a task running on node A. The internet sends another to node C on eighty-eighty. Delivered locally to a task on node C.
+
+Put any node's eye-pee behind your d-n-s or load balancer, and it works. The cluster handles internal routing. This is the routing mesh — the default behaviour for dash p in swarm.
+
+If you do not want this — you want the port published only on nodes actually running the task — use host mode. Docker service create dash p mode equals host comma published equals eighty-eighty comma target equals eighty dash-dash name web my-org slash web. Host mode skips the mesh. Useful when an external load balancer is already smart — the cloud load balancer pinging healthchecks.
+
+Stacks — the compose file in cluster form.
+
+Typing fifteen-flag docker service create lines is the swarm equivalent of typing docker run lines instead of using compose. The fix is stacks.
+
+A stack is a y-a-m-l file in the compose format, with extra deploy keys, deployed to a swarm with docker stack deploy dash c stack-y-a-m-l my-app.
+
+A realistic stack-y-a-m-l. Three services. The web service uses image my-org slash web tag one point two point three. Publishes eighty-eighty colon eighty. Joins app-net. Its deploy block has replicas three. Update-config with parallelism one, delay ten seconds, failure-action rollback, monitor thirty seconds. Restart-policy condition on-failure. Resources limits see-pee-yous zero point five and memory two-fifty-six megabytes. And placement constraint, node role equals worker. The a-p-i service uses image my-org slash a-p-i tag one point four point five, joins app-net, mounts d-b-password secret, deploy block with replicas five and placement max replicas per node two. The d-b service uses image postgres tag sixteen, mounts a p-g-data volume, joins app-net, mounts d-b-password secret, deploy block with replicas one and placement constraint node labels storage equals ess-ess-dee. At the bottom, networks declares app-net with driver overlay. Volumes declares p-g-data as empty. Secrets declares d-b-password with file pointing to dot slash secrets slash d-b-password dot t-x-t.
+
+Then docker stack deploy dash c stack-y-a-m-l my-app. Docker stack services my-app. Docker stack p-s my-app. Docker stack remove my-app.
+
+Note the deploy block — that is the bit compose ignores on a single host, and swarm pays attention to. Replicas, update-config, placement, resources all live there. Outside deploy, the file is the same compose syntax.
+
+Service discovery and d-n-s.
+
+A service named a-p-i is reachable on the overlay network by the hostname a-p-i. There are two flavours of resolution.
+
+Virtual eye-pee mode, the default. A-p-i resolves to a single, stable virtual eye-pee. The kernel load-balances incoming connections across all healthy tasks, using eye-p-v-s. Clients see one eye-pee and do not need to know how many replicas there are.
+
+D-n-s round-robin mode. A-p-i resolves to the eye-pees of all current tasks. Each d-n-s lookup returns a different one, round-robin. The client picks. If a task dies, the client may hit a stale eye-pee and retry.
+
+Switch with endpoint-mode in the deploy block — d-n-s-r-r, or v-i-p, the default.
+
+Use virtual eye-pee for almost everything. It is stable, kernel-fast, and tasks coming and going is transparent. Use d-n-s round-robin only for clients that load-balance themselves and want raw target eye-pees — some service meshes, custom gossip protocols.
+
+For service-to-service, swarm's d-n-s resolves only within the same overlay network. A service in network frontend cannot resolve a service only on backend. By design.
+
+Swarm secrets and configs.
+
+From notebook eight, secrets-as-files. In swarm they are a first-class object stored encrypted at rest in the raft log.
+
+Echo "hunter-two" piped to docker secret create d-b-password dash. Docker secret list. Docker secret inspect d-b-password shows metadata. The value is not returned.
+
+Attach to a service with docker service create dash-dash secret d-b-password dash-dash name a-p-i my-org slash a-p-i. Inside the a-p-i container, the file appears at slash run slash secrets slash d-b-password. Override with target equals something. Permissions zero-four-four-four, owned by root. Only nodes running an a-p-i task ever see the secret. Managers do not push secrets to nodes that do not need them.
+
+Configs are the same idea but for non-secret configuration files. Docker config create n-ginx-conf dot slash n-ginx dot conf. Docker service create dash-dash config source equals n-ginx-conf comma target equals slash e-t-c slash n-ginx slash n-ginx dot conf dash-dash publish eighty colon eighty dash-dash name n-ginx n-ginx alpine. The config is distributed to every node running a task and mounted at the target path. Update by removing the old config, creating a new one, and updating the service. Swarm does not currently version configs in place.
+
+Both secrets and configs are immutable. To change a value, create a new object with a new name and update the service to reference it. This is by design. Rolling out a configuration change is a service update, with all the rolling-update guarantees that brings.
+
+Placement — putting tasks on the right nodes.
+
+Sometimes you want a task on a specific class of node. Examples — the database must be on a node with ess-ess-dees. The legacy app must be on a linux a-m-d-sixty-four node. You want at most two replicas per node, so a node failure does not take all of them.
+
+Constraints are hard requirements. The deploy block, placement, constraints — a list of expressions like node role equals worker, node labels storage equals ess-ess-dee, node platform o-s equals linux, node platform arch equals arm sixty-four. Use docker node update dash-dash label-add storage equals ess-ess-dee, then a node name, to add a label to a node.
+
+Preferences are soft hints. Placement, preferences — a list with spread of node labels datacenter, to spread tasks evenly across datacenters.
+
+Replica caps. Deploy, replicas nine, placement, max replicas per node two — at most two replicas of this service on any one node. With nine replicas and max replicas per node two, you need at least five eligible nodes.
+
+Node management.
+
+Docker node list shows every node and its availability state. Active — accepting new tasks. Default. Pause — runs existing tasks but will not accept new ones. Drain — will not accept new tasks, and swarm re-schedules existing tasks off the node. Used to take a node down for maintenance without dropping replicas.
+
+The pattern is docker node update dash-dash availability drain nodeX. Wait until docker node p-s nodeX is empty. Do maintenance — reboot, kernel upgrade. Then docker node update dash-dash availability active nodeX.
+
+This is the rolling host upgrade workflow. Combined with rolling-update services, you can take a whole cluster through a kernel or operating system upgrade without taking traffic offline.
+
+Promote and demote. Add or remove a node from the manager set without rebuilding. Docker node promote workerX adds to the manager set. Docker node demote managerX returns it to worker only. You would promote to grow the manager count — for example, from one to three for high availability — and demote when scaling back, or before removing a node.
+
+Removing a node. On the node itself, leave the swarm with docker swarm leave for workers, or docker swarm leave dash-dash force for managers. Be careful with managers — quorum implications. On a manager, clean up the entry afterwards with docker node remove nodeX.
+
+The realities — swarm today.
+
+Be honest about where swarm stands.
+
+What works well. Setup speed is unbeatable. Docker swarm init plus one join per node, and you have a cluster in two minutes. The mental model is small and stays close to single-host docker. For small to medium deployments — a handful of services, single region, modest scale — swarm does the job with a fraction of the operational overhead of kubernetes. Edge and internet-of-things clusters frequently land on swarm, or k-three-s, for the same reason.
+
+What does not. The ecosystem has stagnated since kubernetes won. New tools — operators, service meshes, git-ops controllers — almost always target kubernetes first. Swarm support is grudging or absent. Swarm's update model is fine but lacks the richness of kubernetes — no deployment versus stateful-set distinction, simpler health-checks, no native canary or blue-green. And hiring on "swarm experience" today is a smaller pool than on kubernetes.
+
+For the dee-see-ay exam, swarm is core content. Learn it well, including the flags above, the routing mesh, secrets, and placement constraints.
+
+For your career, knowing both is valuable. Swarm clarifies the concepts that kubernetes obscures behind abstractions. After you can comfortably operate a swarm, the kubernetes vocabulary maps cleanly. Swarm service equals kubernetes deployment plus service. Swarm task equals kubernetes pod. Swarm stack equals kubernetes helm chart or kustomization. Swarm routing mesh equals kubernetes koob-proxy, or service of type load-balancer. Swarm overlay equals kubernetes container-network-interface network. Swarm manager equals kubernetes control plane — a-p-i server, scheduler, e-t-c-d. Swarm secret and config equal kubernetes secret and config-map. Swarm placement constraint equals kubernetes node-selector or affinity. And swarm drain equals kubernetes koob-ee-c-t-l drain.
+
+Same shapes, different syntax. That is why notebook nine in this curriculum stands on its own. The concepts will follow you into whatever orchestrator your next job uses.

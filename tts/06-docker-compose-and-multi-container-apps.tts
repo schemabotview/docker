@@ -1,0 +1,147 @@
+Docker compose and multi-container apps.
+
+What is covered. This notebook is the deep dive on docker compose. Why compose — docker run does not scale past one container, and bash scripts are not the answer. The compose-y-a-m-l shape — services, networks, volumes, configs, secrets, and name. A first compose file — web plus database, end to end. The everyday commands — up, down, p-s, logs, exec, build, restart, pull, and config. Build versus image — when to build inline, when to reference a pre-built image. Depends-on with healthchecks — startup order that actually works. Networks and volumes in compose — the implicit defaults versus explicit declarations. Environment — three layers, image-environment, environment block, env-file, plus dot env for substitution. Profiles — services that opt in to specific use cases, such as dev, test, or debug. Overrides — compose-override-y-a-m-l, dash f stacking, per-environment layering. Project name — what docker compose dash p name actually changes, and why two checkouts of the same repo collide. Scaling — dash-dash scale web equals three, the load balancer, and what does not scale this way. And a realistic stack — flask plus postgres plus redis, with healthchecks, secrets via environment, persistent data, and the right startup order.
+
+By the end you should be able to declare any multi-container app in a single y-a-m-l file, bring it up and down with one command, and explain every default compose silently applied.
+
+Why compose.
+
+Notebook three had you typing docker run with seven flags to launch a single container. Now imagine a normal web app — a web server, a database, a redis cache, maybe a worker. That is four containers, four docker run lines, and a user-defined network that connects them, two named volumes, environment variables shared by web and worker, a specific startup order, port mappings, and the same flags repeated across runs.
+
+You can do this with a bash script. Teams have. It is miserable to maintain.
+
+Docker compose is the answer. One y-a-m-l file, called compose-y-a-m-l, describes the whole stack. Docker compose up brings everything up. Docker compose down tears it down. The file is checked into git. Teammates clone and run.
+
+Compose is not an orchestrator — that is notebook nine, swarm, or kubernetes. It is a local development and single-host deployment tool. It runs N containers, on one docker daemon, declaratively.
+
+Compose version two versus version one. Two things called compose exist. Compose version one is the old standalone docker-hyphen-compose python binary. End of life. No new features. Compose version two is the modern docker compose subcommand — space, not hyphen — shipped as a go plugin to the docker command-line client. This is what you use today. Both read the same y-a-m-l. The differences are minor. Version two is faster, supports newer schema features, and integrates with docker context. Use version two and never look back.
+
+The compose-y-a-m-l shape.
+
+The conventional filename is compose-y-a-m-l. Docker-hyphen-compose dot y-m-l and the dot y-a-m-l form also work for backward compatibility. The minimum-viable file is one line, services colon, then web colon, then image colon n-ginx alpine. That is a valid compose file — one service called web, runs n-ginx alpine. Docker compose up brings it up. Docker auto-creates a network for the project and joins web to it.
+
+The full top-level structure has six blocks. Name — the project name, default is the directory name. Services — the containers themselves, each with image, build, ports, environment, volumes, depends-on, networks, healthcheck, restart, and around fifty more keys. Networks — named networks, optional, one default is auto-created. Volumes — named volumes, like docker volume create. Configs — configuration files mounted into services, used more in swarm. And secrets — also swarm-flavoured but works in compose.
+
+We will meet each block in turn.
+
+What compose does silently. When you docker compose up, compose picks a project name — the directory name, unless you override. Creates a default network called project-underscore-default, driver bridge, and attaches every service that does not specify its own networks. Creates any named volumes and networks declared in the file. Starts services in dependency order — depends-on. Tags each container with labels so it knows they belong to this project.
+
+That last point is how docker compose down knows what to clean up — it filters by the project label.
+
+A first compose file — web plus database.
+
+A simple example. Services. The d-b service uses image postgres tag sixteen, with environment for postgres password and postgres database, and mounts a named volume p-g-data at slash var slash lib slash postgres-q-l slash data. The web service uses image n-ginx alpine, publishes port eighty-eighty to container port eighty, and depends-on d-b. At the bottom, volumes declares p-g-data as an empty mapping.
+
+Three things to notice. First, no explicit network. Both services land on the default network — project underscore default. Web can reach d-b by hostname d-b automatically. Same embedded-d-n-s magic from notebook five. Second, named volume. P-g-data is declared under top-level volumes and referenced in d-b's volumes block. Compose creates it on first up. Third, depends-on d-b. Compose starts d-b first, then web. We will see why this is not quite enough on its own in the next section.
+
+Bring it up. Docker compose up dash d, detached. Docker compose p-s to see what is running. Docker compose logs dash f web to tail web logs. Docker compose down to stop and remove — volumes survive. Docker compose down dash v also wipes named volumes.
+
+The everyday commands.
+
+Docker compose up dash d creates and starts every service. Dash d for detached. Docker compose up dash d dash-dash build rebuilds images before starting, for build services. Docker compose down dash v dash-dash r-m-i all stops and removes containers and the project's network. Dash v removes named volumes. Dash-dash r-m-i all removes images. Docker compose p-s lists the project's containers and their state. Docker compose logs dash f, then a service name, tails logs. Docker compose exec service command runs a command inside a running service — the compose equivalent of docker exec. Docker compose run dash-dash r-m service command spins up a new container of service to run command once. Useful for one-shot tasks like migrations. Docker compose build, then optionally a service, builds or rebuilds images for services with build. Docker compose pull pulls the latest images for services with image. Docker compose restart restarts a service without re-creating the container. Docker compose stop and start work without removing. Docker compose config prints the fully-resolved y-a-m-l — after variable substitution and overrides. The first thing to run when "it is not doing what I expected." And docker compose top is like docker top but for the whole stack.
+
+The two you will use most — up dash d, down, and logs dash f. Followed closely by exec for debugging and config when something is mysterious.
+
+Build versus image.
+
+Each service must specify what to run, with one of two keys.
+
+Image runs a pre-built image. Pulled from a registry if not local. For example, services, cache, image redis tag seven alpine.
+
+Build builds an image from a dockerfile in the project. The shortest form is build colon dot. That means the build context is dot and the dockerfile is dot slash dockerfile. Long form gives you more control. You can set context, dockerfile, args, target for multi-stage builds, and pair with image to tag the built image.
+
+You can specify both build and image. Compose builds, then tags with image. That tag is what gets pushed if you docker compose push.
+
+Docker compose up builds images that do not exist locally. To force a rebuild, docker compose up dash-dash build, or an explicit docker compose build.
+
+Depends-on with healthchecks — startup order that actually works.
+
+Depends-on, a list with d-b, is doing less than people think.
+
+Default behaviour. Compose starts d-b before web. But d-b's process is up after a millisecond. The postgres server inside it is not accepting connections for another second or two. Web may start, try to connect, and crash before d-b is ready. The depends-on only waits for "the container has started," not "the service inside it is ready."
+
+The fix is depends-on with a condition, coupled with a healthcheck. For example, the d-b service gets a healthcheck — test command shell, p-g is-ready dash capital U postgres, interval five seconds, timeout three seconds, retries five, start period ten seconds. The web service's depends-on becomes a map — d-b colon, condition colon service-healthy.
+
+Now compose starts d-b, polls its healthcheck, and only starts web once the healthcheck reports healthy. The four conditions you will see. Service-started — wait for container start, the old default. Service-healthy — wait for healthcheck to pass. Service-completed-successfully — wait for a one-shot service, like a migrator container, to exit with code zero.
+
+This pattern — depend on service-healthy — is the standard production-quality compose idiom. Memorise it.
+
+Networks and volumes in compose.
+
+You can use compose for years without ever declaring an explicit network. The default one is fine. But there are two reasons you would add explicit networks.
+
+Tier separation. A web app where the reverse proxy can see the a-p-i, the a-p-i can see the database, but the proxy cannot see the database directly. The proxy service joins network frontend. The a-p-i service joins both frontend and backend. The database service joins backend only.
+
+External networks — connect to a network created outside this compose file, for example by another compose project, or by docker network create. You set the network to external colon true with a name.
+
+For volumes, the pattern from notebook four carries over. Declare named volumes under top-level volumes and reference them in the service. The advantage in compose — the volume's lifecycle is tied to the project. Docker compose down dash v removes it. Without dash v, it persists across up and down cycles.
+
+Bind mounts use the host path directly. Compose resolves relative paths against the directory of the compose-y-a-m-l file. Which is why dot slash s-r-c colon slash app slash s-r-c works regardless of where you ran docker compose up from.
+
+Environment — three layers and a dot env file.
+
+The three places service-level environment variables come from, in precedence order, lowest to highest. First, image environment — baked into the dockerfile. Second, env-file — one or more files of key equals value lines. Third, environment — explicit map or list in the y-a-m-l. Wins.
+
+For example, the a-p-i service has env-file pointing to dot slash a-p-i dot env, and environment block setting log-level to debug and database u-r-l. The environment block overrides anything in a-p-i dot env.
+
+The dot env file — variable substitution. Compose also reads a file called dot env next to compose-y-a-m-l, but for a different purpose — substituting variables into the y-a-m-l itself. For example, a dot env with tag equals one point two point three, and d-b password. In the y-a-m-l, image colon my-org slash a-p-i colon dollar-curly tag becomes my-org slash a-p-i tag one point two point three. Environment d-b password colon dollar-curly d-b-password passes the value to the container.
+
+The distinction. Dot env — variables for the y-a-m-l file's text. Compile-time, at parse. Env-file — variables for the container's environment. Runtime, inside the service. They are easy to confuse. Read the keyword carefully.
+
+Defaults and required values. In substitutions, you can default and require. Dollar-curly tag colon dash latest defaults to latest. Dollar-curly sentry-d-s-n colon question-mark must be set errors if unset.
+
+Profiles — opt-in services.
+
+Sometimes a service should only run in specific contexts — a debug sidecar, a seed-data container, a load test. Profiles let you tag services so they are skipped unless you explicitly enable the profile.
+
+For example, web has no profiles. Debugger has profiles colon list of debug, and runs the net-shoot image. Seed has profiles colon list of seed.
+
+Docker compose up starts only web — the no-profile default. Docker compose dash-dash profile debug up starts web and debugger. Docker compose dash-dash profile debug dash-dash profile seed up starts all three.
+
+A service with no profiles always runs. A service with a profiles list runs only when at least one of its profiles is enabled. This is great for stacks where a few services are dev or test only and should not pollute the default up.
+
+Overrides — layering compose files.
+
+You will often want different settings for dev versus continuous integration versus production. Compose has two mechanisms.
+
+Automatic compose-override-y-a-m-l. If a file called compose-override-y-a-m-l, or dot y-m-l, sits next to compose-y-a-m-l, compose loads both and merges. The override wins on conflicts.
+
+For example, compose-y-a-m-l is the base, with web image my-org slash web and restart unless-stopped. Compose-override-y-a-m-l, gitignored, adds dev tweaks — build colon dot, mount dot slash web at slash app, and environment debug equals one.
+
+Convention. Compose-y-a-m-l is the production-ish base. Compose-override-y-a-m-l is dev-only and gitignored. New devs clone and up, and get the dev-friendly stack.
+
+Explicit dash f stacking. For more layers, pass dash f multiple times. Later files override earlier ones. For example, docker compose dash f compose-y-a-m-l dash f compose-prod-y-a-m-l up. Or dash f compose-y-a-m-l dash f compose-c-i-y-a-m-l up. This pattern beats environment-variable spaghetti for any non-trivial deploy.
+
+How merging works. Scalars, like image and restart, override replaces base. Lists, like ports, volumes, and environment when written as a list, append, not replace. Watch for unexpected duplicates. Maps, like environment when written as a map, and labels, merge key by key.
+
+When the merge result is unclear, docker compose dash f a-y-a-m-l dash f b-y-a-m-l config prints the resolved y-a-m-l. Use it.
+
+Project name — what it means and why duplicates collide.
+
+Compose namespaces everything it creates by a project name. Containers — project dash service dash index, for example my-app dash web dash one. Networks — project underscore default, or project underscore network-name. Volumes — project underscore volume-name. And a label, com dot docker dot compose dot project equals project, on every object.
+
+Default is the base-name of the directory containing compose-y-a-m-l. Override with name colon my-app at the top of compose-y-a-m-l, or docker compose dash p my-app up, or compose-project-name equals my-app in the environment or dot env.
+
+Why two checkouts of the same repo collide. If you clone the same project into tilde slash work slash my-app, and tilde slash scratch slash my-app, and docker compose up in each, they will fight over container names and volumes because both default the project name to my-app. The second one will error or steal the first's containers. Fix — pick a unique project name per checkout. The simplest is to rename one directory. The explicit fix is docker compose dash p my-app dash scratch up, or put compose-project-name equals my-app dash scratch in the dot env file.
+
+Scaling.
+
+Docker compose up dash d dash-dash scale web equals three starts three containers of the web service. Compose names them my-app dash web dash one, my-app dash web dash two, my-app dash web dash three. They all join the project network. They all answer to the d-n-s name web — the embedded resolver round-robins between their eye-pees.
+
+What this is good for. Local load testing. Horizontally-scalable stateless services — the canonical web tier.
+
+What it is not good for. Port mappings — if the service has ports list of eighty-eighty colon eighty, only one replica can bind eighty-eighty. The others fail. To scale a published service, drop the host-port pin and put a load balancer in front — n-ginx, traefik — or use a random port range like eighty-eighty dash eighty-eighty-two colon eighty. Stateful services — do not scale postgres. You will get N postgres containers fighting over the same data directory. Production deployments across hosts — that is swarm or kubernetes. Single-host compose can only scale to the limits of one machine.
+
+A realistic stack — flask plus postgres plus redis.
+
+Bringing it all together. The same flask app from notebook two, but now wired to a postgres for storage and a redis for caching.
+
+The compose-y-a-m-l. Name colon r-t dash demo. Three services. The d-b service uses image postgres tag sixteen, environment for user app, password from the d-b-password substitution that must be set, and database app, named volume p-g-data, healthcheck that runs p-g is-ready, and restart unless-stopped. The cache service uses image redis tag seven alpine, named volume redis-data, healthcheck that runs redis-cli ping, and restart unless-stopped. The web service builds from dot slash web, publishes one-twenty-seven dot zero dot zero dot one colon eighty-eighty to container port eighty-eighty, environment for database u-r-l and redis u-r-l, depends-on d-b condition service-healthy, and cache condition service-healthy, and restart unless-stopped. The bottom of the file declares p-g-data and redis-data as empty volume maps.
+
+A gitignored dot env file holds d-b-password equals local-only-secret.
+
+What this stack gets right. The database password is required. Dollar-curly d-b-password colon question-mark errors if missing. No accidental empty-password deploys. Web waits for both d-b and cache to be healthy. No flaky startup races. Port is bound to one-twenty-seven dot zero dot zero dot one. The app is not accidentally exposed on the host's external interface. All three services restart. A crashed container comes back automatically, and survives daemon restarts. Volumes are named. Data persists across down and up. Down dash v is what nukes data. Project name is pinned via name. No collisions with other checkouts.
+
+Day-to-day commands. Docker compose up dash d brings everything up. Docker compose p-s shows status, including health. Docker compose logs dash f web tails just the web logs. Docker compose exec web s-h drops into the web container. Docker compose exec d-b p-s-q-l dash capital U app app drops into the database. Docker compose run dash-dash r-m web flask d-b upgrade runs a one-shot migration. Docker compose pull, and-and docker compose up dash d, updates images and recreates changed services. Docker compose down stops and removes — data survives. Docker compose down dash v also wipes data. Careful.
+
+This pattern — declarative stack, healthchecked dependencies, named volumes, bound local-host ports, restart policy on everything — is what a compose-based local dev or single-host deploy should look like today.

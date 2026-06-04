@@ -1,0 +1,141 @@
+Networking and port publishing.
+
+What is covered. This notebook is the deep dive on container networking. The mental model — every container gets its own network namespace, with its own interfaces, routes, eye-p-tables rules, and ports. The default bridge network — what docker zero is, and why the default network is the wrong default. User-defined bridges — better isolation, embedded d-n-s, the standard choice. Container-to-container d-n-s — finding a peer by container name. The five built-in drivers — bridge, host, none, overlay, and mac-vlan or eye-p-vlan. Publishing ports — dash p with host colon container, dash capital P, and the expose recap. What dash p actually does — d-nat, eye-p-tables, and the userland proxy. Host network mode — share the host's network stack, when it makes sense. None — the air-gapped container. Inspecting networks — docker network list, docker network inspect, finding a container's eye-pee. Connect and disconnect at runtime — docker network connect, and multi-network containers. D-n-s configuration — dash-dash d-n-s, dash-dash add-host, and the resolve-conf file inside a container. Network aliases — multiple names for the same container. The overlay preview — multi-host networking, covered in full in notebook nine on swarm. And mac-vlan or eye-p-vlan — when a container needs to look like a real device on your local area network.
+
+By the end you should be able to wire two containers together, expose only the ports you mean to, and explain exactly what happens to a packet between a browser and your containerised web app.
+
+The mental model.
+
+When a container starts on a non-host-mode network, the kernel gives it a network namespace of its own. That namespace has its own set of network interfaces — typically just l-o and a virtual eth-zero. Its own eye-pee addresses. Its own routing table. Its own eye-p-tables, or n-f-tables, rules. And its own set of open ports.
+
+From inside the container, this looks like a tiny, isolated machine on a network. From the host, the container's eth-zero is one end of a virtual ethernet pair, called a v-eth pair. The other end is plugged into a linux bridge on the host — docker zero for the default network, or a b-r dash something for user-defined networks.
+
+Picture the topology. On the host, there is a bridge called docker zero, with eye-pee address one-seven-two dot seventeen dot zero dot one. Container A has eth-zero with address one-seven-two dot seventeen dot zero dot two. A v-eth pair connects A's eth-zero to docker zero. Container B has eth-zero with address one-seven-two dot seventeen dot zero dot three. Another v-eth pair connects B's eth-zero to docker zero. And the host has eth-zero, its real network card, with address ten dot zero dot zero dot five. Docker zero is wired to the host's network for outbound traffic.
+
+The bridge — docker zero — is a layer-two switch in software. Containers on the same bridge can talk to each other directly. Reaching outside the host requires network address translation, which the daemon configures on docker zero's upstream gateway.
+
+Three big consequences. First, local-host inside a container is the container. It is not the host. To reach the host from a container, you use a real eye-pee, or the magic name host dot docker dot internal on docker desktop. Second, containers on the same user-defined bridge can reach each other by container name. The daemon runs an embedded d-n-s resolver inside each container's namespace. Third, inbound traffic from the outside world has to be deliberately routed in. That is what dash p does.
+
+The default bridge network.
+
+When you install docker, you get a network called bridge, driver bridge, and a linux bridge called docker zero on the host. Every container started without dash-dash network lands here. Run docker network list and you will see bridge, host, and none.
+
+This default bridge works, but it has two annoying limitations. First, no embedded d-n-s. Containers on the default bridge can talk to each other only by eye-pee. Docker run name web, and docker run name a-p-i, will not be able to resolve a-p-i as a hostname from inside web. You have to find the eye-pee with docker inspect. Second, less isolation. Every container without an explicit network joins the same default bridge. So a container you just ran for an unrelated test can talk to your dev postgres on the same bridge.
+
+For these reasons, use a user-defined bridge instead. The default bridge is mostly a historical default. Do not rely on it for anything you care about.
+
+User-defined bridges — the standard choice.
+
+Creating a user-defined bridge takes one command — docker network create app-net.
+
+What you get versus the default bridge. Embedded d-n-s — yes, resolve other containers by name. Isolation — only containers attached to this network. Attach and detach at runtime — docker network connect or disconnect of network and container. M-t-u, gateway, and subnet are per-network configuration.
+
+The standard pattern is one user-defined bridge per application unit — a web service plus its database plus its cache — and attach all containers in that unit to it. For example, docker network create app-net. Then docker run dash d dash-dash name d-b dash-dash network app-net postgres tag sixteen. Then docker run dash d dash-dash name a-p-i dash-dash network app-net dash-dash environment d-b-host equals d-b my-org slash a-p-i.
+
+Inside the a-p-i container, the hostname d-b resolves to the eye-pee of the d-b container. No port mapping needed between them. They are on the same bridge, talking on their container ports.
+
+The five built-in drivers.
+
+Docker ships with a handful of network drivers. Five matter.
+
+Bridge — the default. Each container gets a private eye-pee on a linux bridge on the host. Outbound is network-address-translated. Inbound only via dash p. Use for ninety-nine percent of single-host work.
+
+Host — the container shares the host's network namespace. No isolation. The container's processes bind directly to the host's interfaces. Use when you need maximum network performance, or to use raw sockets or eye-p-tables from inside the container.
+
+None — the container gets a network namespace with only l-o. No external connectivity at all. Use for sandbox or forensic analysis where you explicitly want zero network.
+
+Overlay — spans multiple hosts. Containers on different physical machines can see each other on the same virtual network. Built on v-x-l-a-n. Use for docker swarm clusters — covered in notebook nine.
+
+Mac-vlan, or eye-p-vlan — the container gets a m-a-c address, or just an eye-pee, on the host's physical local area network. Looks like a real machine to the rest of the network. Use for edge cases — legacy apps that need to broadcast on the local area network, internet-of-things bridges, security tools. Not recommended for general use.
+
+There are also third-party network plugins — calico, weave, cilium — mostly relevant in kubernetes. For plain docker, the five built-ins cover almost everything.
+
+Publishing ports.
+
+A container's processes bind to ports inside their network namespace. By default those ports are not reachable from outside the host. The bridge is private. To let outside traffic in, you have to publish a port.
+
+Dash p with host colon container. For example, docker run dash d dash p eighty-eighty colon eighty n-ginx alpine. Reads — take whatever arrives on the host's port eighty-eighty and forward it to the container's port eighty. Now curl h-t-t-p colon slash slash local-host colon eighty-eighty hits the n-ginx inside the container.
+
+Variations. Dash p eighty-eighty colon eighty binds on all host interfaces, which is zero dot zero dot zero dot zero colon eighty-eighty. Dash p one-twenty-seven dot zero dot zero dot one colon eighty-eighty colon eighty binds only on local-host. The container is reachable from your laptop but not from the wider network. Use this for any dev service that does not need to be remote-accessible — much safer. Dash p eighty-eighty colon eighty slash u-d-p picks the protocol explicitly. Default is t-c-p. Dash p with just the container port — host port omitted — binds to a random free port on the host. Read it back with docker port container, or the ports column of docker p-s.
+
+Dash capital P, auto-publish everything exposed. Dash capital P with no value publishes every port the image's expose instruction declared, each to a random host port. Convenient for testing. Almost never what production wants.
+
+Expose is just documentation. Recall from notebook two — expose eighty in a dockerfile is metadata. It does not publish the port. It just hints "this image listens on eighty." Dash capital P reads that hint to know what to expose. Humans read it to know what to map. Without an expose, you can still dash p eighty-eighty colon eighty. Expose is hint, not gate.
+
+What dash p actually does under the hood.
+
+When you run docker run dash p eighty-eighty colon eighty n-ginx, the daemon does two things.
+
+First, an eye-p-tables d-nat rule. On linux, it inserts a rule in the n-a-t table's pre-routing chain that translates incoming traffic to host colon eighty-eighty into traffic destined for container-eye-pee colon eighty. You can see this with sudo eye-p-tables dash t n-a-t dash capital L docker dash n. This is the fast path. Kernel-space, zero-copy. Second, a userland proxy fallback. For traffic that cannot go through the eye-p-tables rule — for example, local-host to local-host, where d-nat skips — the daemon spawns a small process called docker-proxy that listens on host colon eighty-eighty and forwards to container colon eighty. This is the slow path. A system-call round-trip per packet.
+
+You can disable the userland proxy in the daemon configuration by setting userland-proxy to false, if you want pure eye-p-tables. Most teams leave it on.
+
+Why this matters. Performance — heavy network workloads should test dash p's impact. For most apps the cost is invisible. Visibility — when two containers cannot talk over a published port from inside the host, the eye-p-tables rule is the suspect. Sudo eye-p-tables dash capital L dash n dash v is your debug tool. The "I cannot bind that port" error — if something on the host is already listening on eighty-eighty, dash p eighty-eighty colon eighty will fail. Pick a different host port. And mac o-s and windows reality — on docker desktop, there is no real eye-p-tables chain on your mac. Desktop emulates port publishing by listening on mac-o-s-level ports in its virtual-machine bridge. Same flag, different mechanism.
+
+Host network mode.
+
+Dash-dash network host skips all of this. The container has no namespace of its own. It sees and binds the host's interfaces directly. For example, docker run dash-dash network host n-ginx. N-ginx is now listening on the host's port eighty, not a container port.
+
+What you give up. No port mapping — dash p is ignored. You bind directly. No isolation — if two host-network containers both want port eighty, the second fails. No bridge — no docker zero, no embedded d-n-s.
+
+What you gain. No network-address-translation overhead. Useful for very-high-throughput servers, like load balancers and packet inspection. Raw access to the host's network configuration — some tools need this. And simpler debugging — net-stat, t-c-p-dump, eye-p-tables inside the container all see exactly what the host sees.
+
+Trade-off — host mode breaks the whole "container is isolated" promise for the network specifically. Use it sparingly, and only when you have a specific reason.
+
+Note on desktop. Dash-dash network host works on linux. On docker desktop — mac and windows — it is only partially supported. It shares the virtual machine's network, not your laptop's. Do not rely on it cross-platform.
+
+None — no network.
+
+Docker run dash-dash r-m dash-dash network none alpine eye-pee address. The container's namespace contains only l-o. No eth-zero, no d-n-s, no outbound. Useful for sandboxed batch jobs that should never phone home, or forensic analysis of an image.
+
+You can later docker network connect a network to add interfaces, so dash-dash network none is not necessarily permanent for the container's lifetime.
+
+Inspecting networks.
+
+A few commands you will run constantly. Docker network list — all networks. Docker network inspect app-net — full j-son, including subnet, gateway, and containers attached. Docker network inspect with a format directive can extract just the container-to-eye-pee map. Docker inspect container includes dot network-settings with attached networks. Docker port container shows published port mappings.
+
+To get a single container's eye-pee on a network, docker inspect with format of dot network-settings dot networks dot app-net dot eye-pee-address, then the container name.
+
+A container attached to multiple networks has multiple eye-pees — one per network.
+
+Connect and disconnect at runtime.
+
+A container can be attached to multiple networks at once, and you can change the attachments without restarting. For example, docker network create web-net. Docker network create d-b-net. Docker run dash d dash-dash name a-p-i dash-dash network web-net my-org slash a-p-i. Docker network connect d-b-net a-p-i — now a-p-i is on both web-net and d-b-net. Docker network disconnect web-net a-p-i — now only on d-b-net.
+
+Two common uses. Tiered apps — a reverse proxy on web-net, plus a database on d-b-net. The a-p-i server attaches to both. The proxy cannot see the database. The database is not reachable from the public side. And adding a debugger — attach an existing running container to a temporary inspection network, with a wire-shark or t-c-p-dump sidecar.
+
+The network flag at docker run only takes one network. To attach to more than one at startup, run with one, then docker network connect the rest before the app starts caring.
+
+D-n-s configuration.
+
+By default a container's resolve-conf file is generated by the daemon. It lists one-twenty-seven dot zero dot zero dot eleven, which is docker's embedded resolver, for user-defined bridges, and the host's upstream d-n-s for everything else.
+
+The embedded resolver resolves other container names on the same user-defined network to their eye-pees. Resolves any network alias you have assigned. And forwards everything else to the host's upstream d-n-s.
+
+You can override. Dash-dash d-n-s one dot one dot one dot one sets a custom d-n-s server. Dash-dash d-n-s-search example dot com sets a search domain. Dash-dash add-host of d-b dot internal colon ten dot zero dot zero dot five sets a static hosts entry inside the container. Useful for "I want this name to resolve to this eye-pee without d-n-s." Dash-dash hostname my-host sets the container's hostname. And dash-dash network-alias web, frontend sets alternate names this container can be reached by on its network. Multiple containers can share an alias to round-robin between them.
+
+For example, docker run dash d dash-dash network app-net dash-dash network-alias a-p-i dash-dash network-alias a-p-i-v-one my-org slash a-p-i tag one point zero. Other containers on app-net can curl h-t-t-p colon slash slash a-p-i, or h-t-t-p colon slash slash a-p-i-v-one.
+
+Overlay — multi-host networks, the preview.
+
+Everything above is single-host networking — all containers on one docker daemon. As soon as you have two or more hosts and want containers on host A to reach containers on host B as if they were on the same local area network, you need an overlay network.
+
+Overlay uses v-x-l-a-n under the hood. Each cross-host packet is wrapped in a u-d-p datagram that traverses the underlay — the physical network between hosts — and is unwrapped on arrival. Hosts in the cluster gossip about which container lives where. Routing tables stay in sync.
+
+You can only create overlay networks inside a swarm cluster, or via the experimental docker network create dash d overlay dash-dash attachable for standalone use. Notebook nine covers swarm and overlay networks together, end to end.
+
+For now just know — overlay is how swarm services on different machines talk. If you are not in a swarm, you will not reach for it.
+
+Mac-vlan and eye-p-vlan — real local area network eye-pees.
+
+Mac-vlan gives the container a separate m-a-c address on the host's physical local area network. To the rest of the network — switches, routers, d-h-c-p servers — the container looks like a wholly distinct machine. It has a real local area network eye-pee. No network address translation.
+
+Eye-p-vlan is similar but shares the host's m-a-c, giving the container an eye-pee without a unique m-a-c. Useful when your switch rejects unknown m-a-c addresses.
+
+When you would want this. A containerised legacy app that broadcasts on the local area network — d-l-n-a, m-d-n-s, old industrial protocols. Internet-of-things or home-automation bridges, where the container needs to participate in local-area-network discovery. Network appliances, like intrusion-detection sensors or packet capture, that need promiscuous mode.
+
+When you would not. Pretty much anything else. Bridge plus dash p is simpler, more portable, and does not depend on your physical network.
+
+For example, docker network create dash d mac-vlan dash-dash subnet equals one-nine-two dot one-six-eight dot one dot zero slash twenty-four dash-dash gateway equals one-nine-two dot one-six-eight dot one dot one dash o parent equals eth-zero lan-net. Then docker run dash d dash-dash network lan-net dash-dash eye-pee equals one-nine-two dot one-six-eight dot one dot two-fifty my-org slash legacy-app.
+
+Be aware. By default, the host itself cannot reach a mac-vlan container. The kernel will not loop traffic back through the parent interface. The standard workaround is to create a mac-vlan sub-interface on the host as well, then route through it.

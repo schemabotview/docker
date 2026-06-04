@@ -1,0 +1,185 @@
+Images, layers, and the dockerfile.
+
+What is covered. This notebook goes deep on images. What an image really is — an ordered stack of read-only filesystem layers, plus a j-son configuration blob. Layers and the union filesystem — how overlay-two glues layers into a single root, and where the writable layer comes from. Image references — the full registry, namespace, repository, tag, and digest form, and what each piece defaults to. Inspecting images, using docker image inspect and docker history. The dockerfile, walking through every instruction worth knowing — from, run, copy, add, work-dir, environment, arg, expose, user, label, and health-check. The most confusing pair, command and entry-point, made simple. The build context, which is what docker build dot actually sends to the daemon, and why the docker-ignore file matters. Multi-stage builds, for slim production images that throw away the toolchain. Build-kit and docker build-x — the modern build backend, and what it changes. And tagging conventions — what the latest tag really means, semantic versioning, digests, and how teams version images in practice.
+
+By the end you should be able to read any dockerfile in the wild, write a production-quality one from scratch, and explain exactly what happens when you type docker build.
+
+What is an image, really.
+
+In notebook one we said an image is a frozen, read-only template — a snapshot of a filesystem plus a bit of metadata. That is true. Now let us be more precise.
+
+A docker image is two things bundled together. First, an ordered stack of filesystem layers. Each layer is a tarball of file changes — additions, modifications, deletions — relative to the layer below it. The bottom layer might be the entire debian root filesystem. The next might be install python. The next might be copy your app in. Second, a j-son configuration blob describing how to run the image — the default command, the entry-point, the working directory, environment variables, exposed ports, the user to run as, labels, and history.
+
+These two pieces — the layers plus the configuration — are tied together by a manifest, which lists each layer's digest and the configuration's digest. The whole manifest is itself digested using s-h-a two-five-six. That digest is the image's identity. When you say n-ginx tag one point twenty-seven point zero, a tag, you are really pointing at a digest like s-h-a two-five-six colon a-b-c one-two-three. The tag is a mutable nickname. The digest is the immutable truth.
+
+This design — content-addressable layers — is what makes images cacheable. Two images that share a base layer share the same bytes on disk. Pull python tag three point twelve slim, and then python tag three point twelve slim bookworm, and the overlap downloads once, not twice.
+
+What it is not. A few common misconceptions worth clearing up. An image is not a tarball of a complete operating system. It is just files. There is no init system inside. There is no kernel. When you run the image, your host kernel boots a process inside the union of those file layers. An image is also not an executable. It is data. You need the docker engine, or any open container initiative compatible runtime, to interpret it. And an image does not boot. There is no kernel boot, no init, no system-d — just the host kernel exec-ing the configured command directly.
+
+Layers and the union filesystem.
+
+Every instruction in a dockerfile — from, run, copy, and so on — usually produces a new layer. A tarball of what changed relative to the layer below me. Layers are stacked, bottom up, and a union filesystem driver in the docker daemon presents them to the container as a single root filesystem.
+
+Picture the stack from bottom to top. At the bottom, layer one, the debian bookworm root filesystem, read-only. Above it, layer two, install python, read-only. Above that, layer three, pip install flask, read-only. Above that, layer four, copy app dot p-y into slash app, read-only. And on top of all four, the writable container layer — where changes a running container makes get written.
+
+The default driver on linux is overlay-two, which uses the kernel's overlay-f-s feature to merge the directories with copy-on-write semantics. Reads fall through the stack — the file is served from the topmost layer that has it. Writes trigger a copy-up — the file is copied from its read-only layer into the writable layer, then modified there. The original stays untouched. And deletes are recorded as whiteout files in the writable layer that mask entries below.
+
+Two big consequences. First, layers are cached. When you re-run docker build and dockerfile instructions one through seven have not changed, the daemon reuses layers one through seven from cache and only re-executes instruction eight onward. This is why dockerfile order matters — put rarely-changing steps, like installing dependencies, before frequently-changing steps, like copying source code. Second, the container's writable layer is ephemeral. When you docker remove the container, that layer is deleted. Anything written to the container's filesystem — log files, uploaded user data, cached downloads — is gone. To persist data, you need a volume or a bind mount, which we cover in notebook four.
+
+Image references — the full name of an image.
+
+When you wrote docker run n-ginx, you used a hugely abbreviated form. The full image reference is — registry host with an optional port, slash, namespace slash, repository, colon tag, at digest.
+
+Each piece has a default. There are four levels of abbreviation. N-ginx on its own is equivalent to library slash n-ginx — the library namespace is where docker hub keeps official images. Library slash n-ginx is equivalent to docker dot eye-oh slash library slash n-ginx — docker hub is the default registry. Docker dot eye-oh slash library slash n-ginx with no tag is equivalent to docker dot eye-oh slash library slash n-ginx tag latest — latest is the default tag. And note, latest is not the newest. It is just a tag named latest. A fully-pinned reference looks like docker dot eye-oh slash library slash n-ginx tag one point twenty-seven point zero, at s-h-a two-five-six colon a-b-c one-two-three. Registry, namespace, repo, tag, and digest.
+
+A few examples to read. Ubuntu means docker dot eye-oh slash library slash ubuntu tag latest. Python tag three point twelve slim means docker dot eye-oh slash library slash python tag three point twelve slim. My-org slash a-p-i tag v two point one point zero means docker dot eye-oh slash my-org slash a-p-i tag v two point one point zero. G-h-c-r dot eye-oh slash my-org slash a-p-i tag v two point one point zero is the same image hosted on github container registry instead of docker hub. Registry dot example dot com colon five-thousand slash internal slash billing tag prod is a private registry on port five-thousand. And n-ginx at s-h-a two-five-six colon a-b-c one-two-three is a specific immutable digest of n-ginx, regardless of which tag points there.
+
+Tag versus digest. A tag like one point twenty-seven point zero can be re-pointed at a new image by the publisher — it is mutable. A digest is the s-h-a two-five-six of the manifest and is immutable by construction. Pull n-ginx at s-h-a two-five-six colon a-b-c today and ten years from now, byte for byte the same image. Production deployments often pin by digest for this reason.
+
+Inspecting images.
+
+Two commands open the box and let you see what an image actually contains. Docker image inspect, with a reference, dumps the full j-son configuration — the layers with digests, the default command, environment variables, exposed ports, user, working directory, labels, architecture, operating system, and creation date. It is the source of truth for "what will this image do when I run it." Docker image history shows the layers in order, with which dockerfile instruction created each one and how big the layer is. This is gold for understanding why an image is the size it is.
+
+The two together answer most "what is in this image" questions without ever running it.
+
+Meet the dockerfile.
+
+A dockerfile is a plain text recipe for building an image. The file is conventionally named dockerfile, with no extension, and lives in the root of your project. The simplest possible one starts with from alpine tag three point twenty, and then command, with the exec-form list of echo and "hello from the image."
+
+Save that as dockerfile, then run docker build dash t my-hello dot, followed by docker run dash-dash r-m my-hello. Docker build dash t my-hello dot reads the dockerfile in the current directory, executes its instructions in order, builds a new image, and tags it my-hello tag latest. Then docker run my-hello runs it. That is the whole picture. The rest of this notebook is — what instructions can go in a dockerfile, and how do you choose them.
+
+How a build executes — the mental model. Conceptually, each instruction either adds a layer or modifies the configuration blob. Filesystem-changing instructions — run, copy, and add — execute in a temporary container based on the previous layer, then commit the result as a new layer. Metadata-only instructions — command, entry-point, environment, work-dir, user, expose, label, health-check, and arg — change the image's j-son configuration, no new layer of bytes.
+
+Knowing which kind each instruction is helps you reason about caching and image size.
+
+From — the base layer.
+
+Every dockerfile starts with from. It picks the base image that everything else is layered on top of. For example, from python tag three point twelve slim.
+
+A few rules of thumb for picking a base. Official images, which have no namespace — just python, node, or go-lang — are maintained by docker or the language teams and are the default choice. Slim variants drop everything not strictly needed for the language runtime. Smaller, faster pulls, fewer common vulnerabilities and exposures to patch. Alpine variants use alpine linux, with mus-l libc and busy-box, instead of debian. Smallest of all, but you may hit compatibility issues with binary python wheels — mus-l versus g-libc — so test before committing. Scratch is the literal empty image. Zero bytes, no shell, no libc. Useful as a base for statically-linked go or rust binaries. The smallest possible image. And pin the tag. From python tag three point twelve slim is fine for dev. From python tag three point twelve point seven slim bookworm is better for repeatable builds. Some teams pin all the way to a digest.
+
+A dockerfile can also have multiple from lines — that is a multi-stage build, covered later in this notebook.
+
+Run — execute at build time.
+
+Run, then a command, runs that command inside a temporary container based on the current layer, then commits the result as a new layer. This is how you install packages, compile code, and generate files at build time.
+
+A canonical example is run apt-get update, and-and apt-get install dash y with no-install-recommends, of curl and ca-certificates, and-and remove dash r-f of slash var slash lib slash apt slash lists.
+
+Shell form versus exec form. There are two syntaxes. Shell form runs the command through slash bin slash s-h dash c, so you get shell features — and-and, pipes, redirection, variable expansion. Exec form, written as a j-son array, is exec-ed directly. No shell. No and-and, no dollar var expansion. Better for clarity in some cases, and required when there is no shell in the image, such as scratch or distroless.
+
+Shell form is the default and what you will see ninety-five percent of the time in run.
+
+Why you will see and-and everywhere. Each run makes a new layer. Two separate run apt-get update and run apt-get install lines produce two layers. And worse, the cache from the first can become stale and the second installs from a stale package index. The canonical pattern is to chain apt-get update, then apt-get install with no-install-recommends, then remove the apt lists cache, all in one run. One layer, fresh index, cleaned-up cache. The same trick applies to pip install with no-cache-dir, and n-p-m clean install with cache clean force.
+
+Copy versus add.
+
+Both copy files from the build context into the image. They differ in scope.
+
+Copy, with source and destination, copies files or directories. That is it. No magic. Predictable. Add, also with source and destination, behaves like copy, plus two extra behaviours. First, if the source is a url, add downloads it. Second, if the source is a local tar archive — dot tar, dot tar dot g-z, dot tar dot b-z-two — add auto-extracts it into the destination.
+
+That sounds useful. It is also a footgun. The auto-extraction is surprising. The url form bypasses your build cache discipline and silently re-downloads on changes. Modern best practice — use copy by default, use add only for the auto-extract case, and use run curl, or w-get, instead of add of a url.
+
+Both commands honour change-owner equals user colon group to set ownership on the destination, and from equals stage to copy from another build stage. That is the multi-stage feature, coming up.
+
+The supporting cast — work-dir, environment, arg, expose, user, label, and health-check.
+
+Each one is small. Together they shape how the image behaves when run.
+
+Work-dir slash path sets the working directory for subsequent run, command, entry-point, copy, and add. Equivalent to change-directory slash path between instructions. Creates the directory if it does not exist. Prefer this over run change-directory slash path and-and continue — work-dir actually persists across instructions.
+
+Environment key equals value sets an environment variable that is visible at build time and at run time. Pinned into the image's configuration blob.
+
+Arg, name with an optional default, is a build-time-only variable, not present at run time. Passed in with docker build dash-dash build-arg name equals value. Useful for things like the version of a dependency, the target architecture, or a build-time feature flag.
+
+Expose eighty-eighty is documentation that the container listens on port eighty-eighty. It does not publish the port. Publishing happens at run time with dash p, in notebook five. Expose is metadata. Docker run dash capital P uses it to auto-publish.
+
+User app-user sets the default user, and optionally group, that subsequent run instructions and the container's main process run as. The default is root, which you do not want in production. Usually paired with a run user-add app-user earlier.
+
+Label key equals value attaches arbitrary metadata to the image. Conventional labels — org dot open container initiative dot image dot source, dot version, dot licenses — are read by registries and tools.
+
+Health-check, with options and then command, tells docker how to probe whether the container is healthy. The daemon runs the command at a configurable interval. The container's status reflects pass or fail. When health-checked, docker p-s shows healthy or unhealthy next to the status. Orchestrators like swarm and kubernetes use this to decide when to route traffic.
+
+Command versus entry-point — the confusing pair.
+
+The two instructions everyone gets wrong at first. Both set what the container runs by default. The difference is in how they combine, and how arguments at run time override them.
+
+Command sets the default arguments. Easily overridden by anything you pass to docker run. Entry-point sets the fixed executable. Arguments at docker run are appended to it.
+
+The mental model — the final command run by the container equals entry-point plus, either the run-time arguments, or the command. If you pass arguments to docker run image arg-one arg-two, they replace command, but they are appended to entry-point.
+
+The four combinations. With command, list of python and app dot p-y, docker run image runs python app dot p-y. Docker run image foo bar runs foo bar. With entry-point, list of python and app dot p-y, docker run image runs python app dot p-y. Docker run image foo bar runs python app dot p-y foo bar. With entry-point of python, and command of app dot p-y, docker run image runs python app dot p-y. Docker run image foo bar runs python foo bar. And shell-form command, like command echo hi, runs slash bin slash s-h dash c "echo hi". But docker run image foo bar runs foo bar — the shell-form command is dropped wholesale.
+
+Practical rules. For a single program that takes flags from the user — think curl, git, or ay-double-you-ess — use entry-point for the program and command for default arguments. For a long-lived service that takes its configuration from environment variables — think a web app, a daemon — just use command list of python and app dot p-y, and do not set entry-point. The user can override with docker run image bash to drop into a shell. And always prefer exec form. Shell form forks slash bin slash s-h dash c, which means your process is process I-D two under a shell at process I-D one, and signals — like sig-term from docker stop — do not reach your app cleanly.
+
+The init flag. A related gotcha. Even with exec form, your process I-D one process is solely responsible for reaping zombie children and handling signals. Most app runtimes — python, node — are not designed to be process I-D one. Run with docker run dash-dash init, or set init colon true in compose, and docker injects tini as process I-D one. It does the right thing with signals and zombies, and exec-s your process.
+
+The build context.
+
+When you run docker build dash t my-image dot, that final dot is the build context — the directory whose contents the daemon can see during the build.
+
+Here is what most people miss. The entire build context is tarballed and sent to the daemon before the build starts. This matters because — if your build context is tilde slash projects, which contains twelve gigabytes of node-modules across all your repos, you will wait minutes for the upload, even if your dockerfile only copies one file. And copy and add can only see files inside the context. Copy of dot dot slash shared slash lib into slash app slash lib does not work — anything above the context root is invisible.
+
+Two implications. First, set the context as narrowly as possible. Run docker build from the project root, not from tilde. Second, exclude everything the build does not need with a docker-ignore file.
+
+The docker-ignore file.
+
+A docker-ignore file at the root of the build context tells the daemon which files to leave out of the tarball it ships. Syntax is git-ignore style — one pattern per line, exclamation mark for negation, hash for comments. A typical docker-ignore includes dot git, node-modules, double-underscore py-cache, star dot p-y-c, dot env, dot venv, dist, build, and editor or operating system noise like dot v-s code, dot idea, and dot dee-ess store.
+
+Three reasons this matters. First, faster builds — smaller context equals less to upload to the daemon. Second, better cache hits. A copy of dot into slash app instruction's layer is invalidated by any change in the context. Excluding noise — editor files, local dot env files, build artefacts — means the cache survives unrelated changes. Third, security. Stops you from accidentally baking secrets, ess-ess-h keys, or dot git history into your image. The number of public docker hub images leaking dot env files is genuinely embarrassing. The docker-ignore file is your first defence.
+
+Treat the docker-ignore file as part of every dockerfile, not optional.
+
+A real build — python flask app.
+
+Let us put it together. We will build and run a tiny flask app. Three files — app dot p-y, requirements dot t-x-t, and dockerfile — plus a docker-ignore.
+
+The app is a flask app with one route that returns a j-son hello-from-docker message, listening on host zero point zero point zero point zero, port eighty-eighty. The requirements file pins flask at version three point zero point three. The dockerfile starts from python tag three point twelve slim, sets two environment variables — python-do-not-write-bytecode equals one, and python-unbuffered equals one. Sets work-dir to slash app. Copies requirements dot t-x-t into the working directory. Runs pip install with no-cache-dir of dash r requirements dot t-x-t. Copies app dot p-y in. Creates a non-root user called app-user with create home and bash shell. Switches user to app-user. Exposes port eighty-eighty. And sets command, exec form, to python app dot p-y.
+
+The docker-ignore excludes dot git, the py-cache, p-y-c files, dot venv, and dot env.
+
+Reading the build output. When you run docker build, you see a sequence of step lines — load build definition, load metadata for python tag three point twelve slim, one of six from python tag three point twelve slim at the digest, load build context, two of six work-dir slash app, three of six copy requirements dot t-x-t, four of six pip install, five of six copy app dot p-y, six of six user-add app-user, and finally exporting to image, writing the digest, and naming to flask-demo tag zero point one.
+
+Each step is an instruction, which becomes a layer. If you re-build without changing anything, you see cached next to each step and the whole thing finishes in milliseconds. If you change app dot p-y, only steps five and six re-execute. Earlier layers are still cache hits. That is the layer cache in action.
+
+The big rule that follows — put instructions that change rarely, like installing dependencies, before instructions that change often, like copying source. That is why copy requirements dot t-x-t and pip install come before copy app dot p-y.
+
+Multi-stage builds.
+
+Compiled languages — go, rust, java, c-plus-plus — need a toolchain at build time but not at run time. You do not want your production image to ship gee-see-see, build headers, or the java development kit. Multi-stage builds solve this.
+
+The idea — write multiple from blocks in one dockerfile. The final image contains only the last stage. Earlier stages are scratch pads.
+
+For example, a go service. Stage one is named builder, using from go-lang tag one point twenty-three as builder. Work-dir slash s-r-c. Copy go dot mod and go dot sum. Run go mod download. Copy dot. Run see-go-enabled equals zero, go-o-s equals linux, go build dash o slash out slash server, dot slash see-m-d slash server. Stage two starts fresh from g-see-r dot eye-oh slash distroless slash static colon non-root. Copy from builder of slash out slash server into slash server. User non-root colon non-root. Expose eighty-eighty. Entry-point list of slash server.
+
+What is happening. Stage one — the builder — uses a fat go-lang tag one point twenty-three image. It has the compiler, source code, dependency cache. Builds the binary into slash out slash server. Stage two starts fresh from distroless static non-root, which is a few megabytes, no shell, no package manager, non-root user. The copy from builder instruction pulls in just the compiled binary. The final image ships only the binary.
+
+A go service that is one point five gigabytes with the s-d-k becomes around fifteen megabytes. Faster pulls, fewer common vulnerabilities and exposures in the image, no toolchain to attack.
+
+The pattern applies anywhere there is a build phase distinct from a run phase. For node, install all n-p-m dependencies and build in stage one, copy dist and production node-modules to a slim stage two. For python, pip install into a virtual environment in stage one, copy the virtual environment into a slim stage two. For java, run mvn package in stage one, copy the jar into eclipse-temurin tag twenty-one j-r-e, which has no java development kit, in stage two.
+
+You can also dash-dash target equals builder on the docker build command to build only up to a named stage. Handy for continuous integration separation — test in builder, deploy from runtime.
+
+Build-kit and docker build-x.
+
+The original docker build engine was straightforward but limited — strictly sequential, no parallelism, no cross-platform builds, awkward secret handling. Since twenty-nineteen, docker has shipped a new build backend called build-kit, and on modern installs — docker version twenty-three or later on linux, docker desktop everywhere — it is the default.
+
+What build-kit changes. Parallel build steps — multi-stage builds can build independent stages in parallel. Better caching — smarter dependency tracking. It can do cache mounts, where run dash-dash mount of type cache, target slash root slash dot cache slash pip, then pip install, reuses pip's cache across builds without baking it into a layer. Secrets — run dash-dash mount of type secret, with i-d my-secret, then cat slash run slash secrets slash my-secret, lets a build read a secret without it being committed to a layer. Pair with docker build dash-dash secret i-d equals my-secret, source equals dot slash secret dot t-x-t. Ess-ess-h forwarding — run dash-dash mount of type ess-ess-h, then git clone, uses your host's ess-ess-h agent for private repos. And cross-platform builds — build linux slash a-m-d-sixty-four and linux slash arm-sixty-four images from one dockerfile, on one machine.
+
+The command-line client that drives build-kit is docker build-x — an extension to docker build that is now the default builder. Most of the time, docker build and docker build-x build are interchangeable.
+
+A multi-platform build, end to end. First, docker build-x create dash-dash name multi dash-dash use dash-dash bootstrap, a one-time setup that creates a builder that supports multiple platforms. Then, docker build-x build dash-dash platform of linux slash a-m-d-sixty-four comma linux slash arm-sixty-four, dash t my-org slash my-app tag one point zero point zero, dash-dash push, dot. The push flag is required for multi-platform builds because the resulting manifest list — one image reference, multiple per-architecture images underneath — can only live in a registry, not in your local image store.
+
+To enable advanced dockerfile features — run dash-dash mount, here-docs, the syntax directive — include a syntax pragma as the first line. Hash space syntax equals docker slash dockerfile colon one point seven, then your from line, then the rest. That pulls the latest dockerfile frontend at build time.
+
+Tagging conventions.
+
+Tagging is policy, not technology. Docker does not care what you write after the colon. But teams that ship images converge on a small set of patterns.
+
+What latest actually means. Nothing. It is the default tag when you do not specify one. Latest is not "the newest version." It is just a tag named latest, that someone chose to push, or not. Treat it as a convenience for hello-world and dev-only images. Do not deploy latest to production. Your production deploy will be "whatever happened to be there when the pod restarted" — which is the opposite of reproducible.
+
+Tagging patterns you will see in the wild. Semantic version — my-app tag one point four point two. Clean, what humans want to read. Sliding semantic version — my-app tag one point four, my-app tag one, my-app tag latest — all re-point to the newest patch, minor, or overall. Common for libraries, like python tag three point twelve, node tag twenty. Consumers choose how aggressively they pin. Git s-h-a — my-app tag a-one-b-two-c-three-d — uniquely identifies the source commit that built it. Great for continuous integration. Not great for humans. Date — my-app tag two-thousand-twenty-six dash oh-six dash oh-three — when versions do not apply, for example a nightly build snapshot. Combined — my-app tag one point four point two dash a-one-b-two-c-three-d — both, for the best of both. And channel — my-app tag stable, edge, or r-c — re-pointed as new builds promote through continuous integration.
+
+Pin by digest in production. For the strictest reproducibility, deploy by digest. Image colon my-org slash my-app, at s-h-a two-five-six colon a-b-c one-two-three. A tag can be re-pushed. A digest cannot. Kubernetes manifests committed to git that pin by digest give you byte-identical rollbacks years later.
+
+Re-tagging an existing image. Docker tag is free. It just adds another name pointing at the same digest. You can run docker tag flask-demo tag zero point one to my-org slash flask-demo tag zero point one, then docker tag the same source to my-org slash flask-demo tag latest, then docker push both. Both pushes upload zero new bytes for the layers. They are content-addressed and already on the registry. They just update the tag pointers.
