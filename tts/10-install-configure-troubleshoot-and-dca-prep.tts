@@ -1,0 +1,163 @@
+Install, configure, troubleshoot, and dee-see-ay prep.
+
+What is covered. This final notebook brings everything together with installation, configuration, troubleshooting, and exam preparation. Installing docker engine on linux — the official package paths, the convenience script, and why you generally pick the former. Post-install — adding your user to the docker group, enabling on boot, and where the daemon's data lives. Rootless docker — the alternative install for unprivileged daemon, a recap from notebook eight. The daemon configuration — the daemon dot j-son file, every setting worth knowing, and the reload semantics. Storage drivers — overlay-two, the default, what b-t-r-f-s, z-f-s, and device-mapper are for, and when, rarely, you would change. Logging drivers — j-son-file, journal-d, local, sys-log, and the cloud drivers. The runtime layer — container-d, run-see, and alternative runtimes like crun, kata, and g-visor. Daemon troubleshooting — journal-c-t-l dash u docker, docker info, and disk and resource diagnostics. The container troubleshooting playbook — the seven common failure modes, and how to diagnose each. Build troubleshooting — cache misses, and build-kit diagnostics. Network troubleshooting — net-shoot, eye-p-tables, and route inspection. The dee-see-ay exam itself — domains, weighting, format, sample question style. Exam-prep tactics — what to practise, what to memorise, what to look up at test time. And where to go next — kubernetes, c-k-a-d and c-k-a, and cloud-specific certs.
+
+By the end you should be able to install, configure, and troubleshoot a docker engine install on a fresh linux box, and walk into the dee-see-ay exam knowing what every section is asking about.
+
+Installing docker engine on linux.
+
+The right way to install docker engine for any kind of production use is from docker's official package repositories. Not from a distro's default repos, which often lag months behind. And not from the convenience script, which is fine for throwaway virtual machines but skips integrity checks.
+
+For ubuntu or debian, four steps. First, install prerequisites — sudo apt-get update, then apt-get install ca-certificates and curl. Second, add docker's official g-p-g key — install a key directory under slash e-t-c slash apt slash keyrings, curl the key into docker dot a-s-c, and change the mode to readable. Third, add the repo — write a deb line referencing the keyring and the docker download host, into a sources list file. Fourth, install — apt-get update, then apt-get install docker dash see dash e, docker dash see dash e dash see-l-i, container-d dot eye-oh, docker dash build-x dash plugin, and docker dash compose dash plugin.
+
+Five packages. Docker dash see dash e — the daemon, docker-d. Docker dash see dash e dash see-l-i — the docker command-line client. Container-d dot eye-oh — the container runtime. Docker dash build-x dash plugin — the build-kit-based builder, notebook two. And docker dash compose dash plugin — compose version two, notebook six.
+
+For red-hat-family distros — fedora, cent-o-s, rocky, alma — install d-n-f-plugins-core, then dnf config-manager dash-dash add-repo with the docker-c-e dot repo u-r-l, then dnf install the same five packages. Adjust the repo u-r-l for your distro family — fedora versus cent-o-s.
+
+The convenience script. Curl from get dot docker dot com, piped to s-h. One line. Pulls and runs the official install script. Fine for ephemeral virtual machines or learning. Do not use in production — no signature pinning, no version control, makes future upgrades opaque.
+
+Post-install.
+
+A fresh install needs three or four small adjustments before it is pleasant to use.
+
+Run docker without sudo. By default, slash var slash run slash docker dot sock is owned by root colon docker. To talk to it without sudo, add your user to the docker group with sudo user-mod dash a capital G docker dollar-user, then new-group docker to re-evaluate group membership in this shell. Now docker p-s should work without sudo.
+
+Security caveat — the docker group is effectively root on the host. A user in docker can run docker run dash v slash colon slash host alpine s-h, and do anything. On shared hosts, prefer rootless docker.
+
+Enable on boot. Sudo system-control enable dash-dash now docker. Enable makes docker start at boot. Dash-dash now also starts it right now if it is not already running.
+
+Verify. Docker version shows client and server versions. Docker info shows daemon configuration, storage driver, kernel, and more. Docker run hello-world is the one full end-to-end test.
+
+Where docker's data lives. By default, everything is under slash var slash lib slash docker. Overlay-two for image and container layers. Volumes for named volumes. Containers slash i-d for container metadata and logs. And image, network, plugins, swarm, and others. The daemon's own configuration lives at slash e-t-c slash docker slash daemon dot j-son. The system-d unit is slash lib slash system-d slash system slash docker dot service.
+
+Rootless docker — the alternative install.
+
+Recap from notebook eight — rootless docker runs the daemon as your unprivileged user, not as root. Different install path. As your normal user, not with sudo, curl from get dot docker dot com slash rootless piped to s-h. Follow the printed instructions to add tilde slash dot bin to your path, and to set the docker-host environment variable. Then system-control dash-dash user enable docker, and system-control dash-dash user start docker. Docker info should show security options rootless.
+
+The rootless daemon uses slip-four-net-n-s for networking, and stores its state under tilde slash dot local slash share slash docker. Trade-offs covered in notebook eight — slower networking, no privileged flag, no eye-p-tables writes — but a much smaller attack surface.
+
+The daemon configuration.
+
+Docker-d reads slash e-t-c slash docker slash daemon dot j-son at startup. The file is optional. With no configuration, defaults apply. The full schema is huge. Here are the settings that matter in practice.
+
+A typical daemon configuration might include — data-root, which moves docker's data directory elsewhere. Storage-driver, set to overlay-two. Log-driver, set to j-son-file, with log-opts of max-size ten-m and max-file three. Default-runtime, set to run-see. Runtimes with an entry for crun, pointing to its path. Registry-mirrors, listing your local cache. Insecure-registries, for lab-only h-t-t-p registries. User-n-s remap, set to default. No-new-privileges, true. Userland-proxy, false. Live-restore, true. Default-address-pools, listing your subnet base and size. And metrics-addr, exposing prometheus-format metrics on one-twenty-seven dot zero dot zero dot one colon nine-three-two-three.
+
+What each block does. Data-root moves docker's data directory elsewhere. The default slash var slash lib slash docker is often on the root partition. Moving to a dedicated disk avoids filling the operating-system root. Storage-driver picks overlay-two, the default, or b-t-r-f-s, z-f-s, device-mapper. Log-driver and log-opts set the global default. Without max-size and max-file, j-son-file logs grow until the disk fills. Always set these. Default-runtime and runtimes — run-see is default. Add alternates like crun, kata-runtime, g-visor, and pick per-container with docker run dash-dash runtime equals something. Registry-mirrors — try this list first on pulls. The cache from notebook seven. Insecure-registries — allow h-t-t-p, no t-l-s, for these hosts. Lab use only. User-n-s remap — user-namespace remapping from notebook eight. Userland-proxy false disables the docker-proxy fallback from notebook five, eye-p-tables only. Live-restore true allows the daemon to restart without killing running containers. Useful during daemon upgrades. Default-address-pools — pool that user-defined bridges allocate from. Avoid clashes with your corporate local-area network subnets. And metrics-addr exposes prometheus-format metrics for docker itself.
+
+After editing, reload. Sudo system-control reload docker picks up some changes. Sudo system-control restart docker is required for storage-driver, data-root, and user-n-s remap. Docker info always reflects what is actually loaded. Verify after restart.
+
+Storage drivers.
+
+The storage driver decides how layers and the writable layer are stacked on disk.
+
+Overlay-two, the default, uses the overlay-f-s kernel feature. Fast, stable, what almost everyone uses. The default since docker eighteen. B-t-r-f-s uses the b-t-r-f-s filesystem. Native snapshots, good for copy-on-write-heavy workloads. Requires slash var slash lib slash docker on a b-t-r-f-s subvolume. Z-f-s uses the z-f-s filesystem. Similar pitch to b-t-r-f-s. Hardly used on linux outside specific shops. Device-mapper, deprecated, uses l-v-m device-mapper. Legacy. Was the default on early red-hat. Deprecated. V-f-s is plain copies. No copy-on-write. Each layer is a full copy. Slow, huge disk use. Only for testing. And fuse-overlay-f-s is overlay via fuse. Used by rootless docker on kernels without unprivileged overlay support.
+
+For ninety-nine percent of installs, keep overlay-two. To verify, docker info piped to grep storage. You should see storage driver overlay-two, backing filesystem like ext-f-s, supports d-type true, native overlay diff true.
+
+Switching storage drivers is destructive. The daemon will not read another driver's data. Plan it for a maintenance window with full image and volume backups.
+
+Logging drivers.
+
+The default j-son-file driver writes each container's standard output and standard error to slash var slash lib slash docker slash containers slash i-d slash i-d dash j-son dot log. Docker logs reads from there.
+
+Other drivers ship logs elsewhere. J-son-file, the default — local file per container. Docker logs works. Local — local file, compressed, faster. Docker logs works. Journal-d — system-d journal. Docker logs works. Sys-log — local or remote sys-log. Docker logs does not work. G-e-l-f — gray-log extended log format, u-d-p or t-c-p. No. Fluent-d — fluent-d collector. No. Ay-double-you-ess logs — ay-double-you-ess cloud-watch. No. G-c-p logs — google cloud logging. No. Splunk — splunk h-e-c. No. And none — discarded. No.
+
+Pick at three levels. Daemon default, in daemon dot j-son's log-driver key. Per container, with docker run dash-dash log-driver and dash-dash log-opt. Or per compose service, with the logging block.
+
+Most teams keep j-son-file with rotation on dev hosts, and switch to a centralised driver — fluent-d, g-e-l-f, ay-double-you-ess logs, splunk — on production. If you switch the daemon default after containers exist, existing containers do not migrate. Only newly-created ones use the new driver.
+
+The runtime layer.
+
+From notebook one — the daemon does not actually run containers. Container-d, the runtime supervisor, talks to run-see, the low-level runtime, which does the namespace, control-group, and exec dance.
+
+You usually do not touch this layer. Cases where you might. Crun — a see-based reimplementation of run-see that starts containers around ten times faster. Drop-in replacement at low risk. Configure with default-runtime crun. Kata-runtime — runs each container inside a lightweight virtual machine. Heavier than run-see, but real hardware isolation. Used in multi-tenant clusters where the kernel-shared model is not trusted enough. G-visor, also called run-s-c — userspace kernel sandbox. Implements much of the linux system-call surface in go, in userspace. Strong isolation, modest performance cost. Used by google internally, and by some platform-as-a-service providers.
+
+To use them per-container, after registering in daemon dot j-son, docker run dash-dash runtime equals kata-runtime alpine s-h.
+
+Standalone container-d. Container-d can run without docker. Kubernetes uses it directly via the container runtime interface. Your docker daemon and a kubernetes node can share one container-d instance, which is how docker and koob-ee-c-t-l can see overlapping resources on the same machine.
+
+Daemon troubleshooting.
+
+A small set of commands answers most "what is wrong with docker" questions. Docker info — daemon configuration, all current settings. Docker version — client plus server, useful for "is the daemon up." Docker system d-f — disk usage breakdown. Docker system d-f dash v — per-image, per-container detail. Docker system events — live stream of every event the daemon sees. Docker system prune — clean stopped containers, unused images, networks. Docker system prune dash a — also remove all unused images. Docker system prune dash-dash volumes — also wipe unused volumes. Careful.
+
+When the daemon will not start. Sudo system-control status docker — is it actually running. Sudo journal-c-t-l dash u docker dash n two-hundred — last two hundred lines of daemon log. Sudo journal-c-t-l dash u docker dash f — follow live. Sudo docker-d dash-dash debug — run in foreground with debug logging.
+
+Common causes. Bad daemon dot j-son — syntax error or unknown key. Sudo docker-d dash-dash validate checks syntax. Storage driver mismatch — slash var slash lib slash docker was created by one driver, you reconfigured to another. Either move it aside, or revert the configuration. Port already in use — another process is on twenty-three-seventy-five, twenty-three-seventy-six, or other docker ports. And permissions on slash var slash lib slash docker — wrong ownership after a botched move.
+
+When the daemon is up but slow. Docker system d-f — is slash var slash lib slash docker on a tiny disk. Top, eye-o-top — daemon process busy, disk input output saturated. Docker events dash-dash since five-m — stuck pulls or builds making noise.
+
+Disk filling up. Docker system d-f — how bad. Disk-usage of slash var slash lib slash docker subdirectories — which is fattest. Docker system prune dash a — nuclear option, often the right call.
+
+The container troubleshooting playbook.
+
+The seven container failure modes you will see, with the first commands to run.
+
+First, "it will not start." Docker p-s dash a dash-dash filter name equals my-c shows status. Docker logs my-c shows what its main process said. Docker inspect my-c, piped to j-q dot state, shows exit code, out-of-memory-killed flag, started and finished times. Common causes — bad command or entry-point, missing files, immediate crash, out-of-memory, which is exit one-three-seven.
+
+Second, "it starts then exits immediately." Docker logs my-c. Or docker run dash-dash r-m dash i-t image s-h to boot a shell instead, and poke around. Or docker run dash-dash r-m dash i-t dash-dash entry-point s-h image to bypass entry-point. If you cannot see why, run the container with the same flags but s-h or bash as the command. Gives you a shell to debug from.
+
+Third, "it is running but the app inside is not healthy." Docker exec dash i-t my-c s-h gets a shell inside. Docker top my-c shows what processes are running. Docker exec my-c p-s dash e-f does the same from inside. Docker exec my-c net-stat dash t-l-n-p shows what is listening. Docker stats dash-dash no-stream my-c shows see-pee-you, memory, input output.
+
+Fourth, "I cannot reach it from outside." Docker port my-c shows what is published. Curl h-t-t-p colon slash slash local-host colon eighty-eighty — can the host reach it. Sudo eye-p-tables dash t n-a-t dash capital L docker dash n — is the d-nat rule there. Docker logs my-c — is the app actually listening on zero dot zero dot zero dot zero. Common cause — the app inside binds one-twenty-seven dot zero dot zero dot one instead of zero dot zero dot zero dot zero. Inside the container, one-twenty-seven dot zero dot zero dot one is reachable only from inside. Port publishing cannot see it.
+
+Fifth, "two containers cannot talk to each other." Docker network list shows which networks exist. Docker inspect with format dot network-settings dot networks shows what each container is attached to. Docker run dash-dash r-m dash-dash network of net, net-shoot, ping other — debug from the network. If they are on different user-defined networks, they cannot reach each other. If they are on the default bridge, they cannot resolve each other by name. Notebook five.
+
+Sixth, "it is slow." Docker stats my-c — live see-pee-you, memory, input output. Docker inspect my-c with format dot host-config dot memory and dot host-config dot nano-see-pee-yous — what are the limits. Docker logs dash-dash since five-m my-c — recent app log. If memory is set and the app is paging, raise the limit. If nano see-pee-yous is set and the app is see-pee-you-bound, raise it.
+
+Seventh, "it died with status one-three-seven." Exit code one-three-seven equals sig-kill equals memory limit hit, which is out-of-memory-killed, or someone docker kill'd it. Docker inspect my-c with format dot state dot out-of-memory-killed is the smoking gun. D-mesg piped to grep "killed process" shows the kernel-level out-of-memory message on the host. Raise the memory limit, or fix the app's memory hog.
+
+Build troubleshooting.
+
+Docker build has its own debugging path, mostly via build-kit's plumbing.
+
+Build with full verbose output, no log line collapsing — docker build-x build dash-dash progress equals plain dash t my-image dot. Print the resolved build context size — docker-build-kit equals one docker build dash-dash progress equals plain dash-dash no-cache dot. Inspect what is in the build cache — docker build-x d-u dash-dash verbose. Wipe the build cache, forcing rebuilds — docker builder prune. Or docker build-x prune dash-dash all, nuclear.
+
+Common build problems. Cache misses where you expect hits — usually a copy whose source changed. Dash-dash progress equals plain shows you each step's cache state. Often a stale docker-ignore is letting irrelevant files into the context. Unknown instruction or syntax errors — you are missing the build-kit syntax pragma. Add the syntax line as the first line. "Failed to compute cache key" — source path does not exist in the context. Check the docker-ignore and the path itself. Slow copy dot step — build context is huge. Disk-usage of dot to see size. Trim the docker-ignore. Build hangs on apt-get update — daemon's d-n-s or network is broken. Check docker run dash-dash r-m alpine ping dash c one of archive dot ubuntu dot com from the same host.
+
+Network troubleshooting.
+
+When packets are not flowing, the net-shoot image — nicolaka slash net-shoot — is the universal docker network debug image. Ships with t-c-p-dump, dig, n-map, eye-pee, curl, m-t-r, and dozens of others.
+
+Attach net-shoot to a service's network and poke. Docker run dash-dash r-m dash i-t dash-dash network app-net nicolaka slash net-shoot. Inside, ping a-p-i. Dig a-p-i. Curl dash v h-t-t-p colon slash slash a-p-i slash health. T-c-p-dump dash i any port eighty-eighty.
+
+Key commands inside net-shoot or any debug container. Eye-pee a for interfaces and eye-pees, host-network or container-network depending on attach. Eye-pee route for the routing table. Dig of a name for d-n-s resolution, using the container's resolve-conf. Curl dash v of a u-r-l for h-t-t-p-level verbose, including t-l-s, redirects, and timing. T-c-p-dump dash i any dash n-n with a port filter to see actual packets. And ns-lookup of a name, or get-ent hosts of a name, for d-n-s in different forms.
+
+Inspecting the daemon's eye-p-tables rules. Sudo eye-p-tables dash t n-a-t dash capital L docker dash n dash v shows n-a-t rules for port publishing. Sudo eye-p-tables dash capital L docker-user dash n dash v shows the user-defined chain — a hook for custom rules. These are what the daemon manages. If a published port is not reachable, the absence of the corresponding d-nat rule is the cause.
+
+The dee-see-ay exam itself.
+
+The docker certified associate is administered by mirantis, who acquired docker enterprise. The exam tests practical docker knowledge across six domains.
+
+Format. Fifty-five multiple-choice or multiple-select questions. Ninety minutes. Online proctored. Taken at home or in-office. Passing score typically around sixty-five to seventy percent. Mirantis has not published an exact number. Validity is two years.
+
+Domain weights, approximate. Orchestration is around twenty-five percent — swarm, services, stacks, rolling updates, scaling, placement, secrets. Image creation, management, and registry is around twenty percent — dockerfile, multi-stage builds, tagging, registries, image-related security. Installation and configuration is around fifteen percent — installing docker engine, daemon dot j-son, drivers, contexts. Networking is around fifteen percent — bridge, host, none, overlay, mac-vlan, publishing, troubleshooting. Security is around fifteen percent — non-root, capabilities, secrets, image signing, runtime sandboxing. And storage and volumes is around ten percent — volumes, bind mounts, drivers, plugins, mount syntax.
+
+Each of those domain pillars is covered in this curriculum — notebooks two on images, three on runtime, four on storage, five on networking, six on compose, peripherally tested, eight on security, nine on orchestration, ten on install and configure.
+
+Exam-prep tactics.
+
+What to memorise versus look up. Memorise — the exam does not give you man pages. The shape of docker run, the most-used flags — dash d, dash p, dash v, dash-dash r-m, dash i-t, dash-dash restart, dash-dash name, dash-dash network, dash u, dash-dash memory, dash-dash see-pee-yous. Storage — volume versus bind mount versus t-m-p-f-s semantics, the on-mount-empty seeding rule. Networking — when containers can resolve each other by name, the routing-mesh model in swarm. Dockerfile — every common instruction and its quirks, command versus entry-point, copy versus add, environment versus arg. Swarm — services versus tasks, replicated versus global, the rolling-update flags, docker service versus docker stack. And compose deploy block keys — replicas, update-config, placement, restart-policy, resources.
+
+Look up at test time — you would waste study cycles memorising. Exact daemon dot j-son keys you do not use weekly. The full set of sec-comp or app-armor profile paths. Specific cloud-registry hostname schemes.
+
+What to practise, not just read. Set up an actual swarm cluster — multi-pass or three lima virtual machines on a mac. You should be able to do each of these from memory. Docker swarm init and join. Docker service create, scale, update, rollback. Docker stack deploy from a stack-y-a-m-l. Docker network create overlay. Docker secret create and use. Docker node update dash-dash availability drain and active.
+
+Reading about them is not enough.
+
+Sample-question style. The dee-see-ay leans on "given this scenario, what command" or "which of these statements is true." A few stylised examples. Question one — you want to update a service named a-p-i to use image my-org slash a-p-i tag one point four, updating two replicas at a time with a five-second delay, and rolling back automatically on failure. Which command does this. Option A is docker service rollback a-p-i one point four dash p two dash d five-s. Option B is docker service update dash-dash image my-org slash a-p-i tag one point four, dash-dash update-parallelism two, dash-dash update-delay five-s, dash-dash update-failure-action rollback, a-p-i. Option C is docker stack deploy dash-dash image my-org slash a-p-i tag one point four, dash-dash parallel two. Option D is docker container update a-p-i dash-dash image my-org slash a-p-i tag one point four. The correct answer is B. Question two — which command prints all containers, including stopped ones, with their names and status, in a tabular format. Option A is docker p-s dash a. Option B is docker container list dash-dash all dash-dash format table dot names tab dot status. Option C is docker inspect dash-dash status all. Option D is both A and B are valid. The correct answer is D.
+
+Working through the official sample questions, of which mirantis publishes around ten, is high-yield.
+
+Where to go next.
+
+You have taken the dee-see-ay path. The natural follow-ons.
+
+Kubernetes. After docker comes kubernetes. It orchestrates the same images, with a richer model and a bigger ecosystem. The mapping from notebook nine makes the transition concrete — service to deployment, task to pod, stack to helm chart. C-k-a-d, certified kubernetes application developer, is app-level focus — pods, deployments, services, config-maps, secrets. The right next cert after dee-see-ay. C-k-a, certified kubernetes administrator, is cluster-level focus — koob-ay-d-m, e-t-c-d, networking, troubleshooting nodes. Take after c-k-a-d. C-k-s, certified kubernetes security specialist, is security focus on top of c-k-a.
+
+Cloud-specific containers. If your work runs in a cloud, the cloud-vendor certs make the platform-specific glue concrete. Ay-double-you-ess — e-c-s, e-k-s, app runner, far-gate. Bundled in the ay-double-you-ess certified dev-ops or solutions architect certs. G-c-p — cloud run, g-k-e. Bundled in the google cloud professional cloud architect. Azure — a-k-s, container apps. Bundled in a-z dash four-hundred, azure dev-ops engineer.
+
+Adjacent depth. Continuous integration and continuous delivery with containers — github actions, gitlab continuous integration, argo-c-d, flux. Where the images you build get to production. Observability — prometheus, grafana, loki, open-telemetry. What you bolt onto containerised services to see what they are doing in production. Service meshes — eye-stio, linker-d. Layer-seven routing, retries, mutual t-l-s between services. Supply chain — cosign, in-toto, s-l-s-a, o-p-a or ky-vern-o. The notebook eight supply-chain section, taken to production.
+
+The path from "I have never touched a container," in notebook one, to "I can architect a containerised production system with supply-chain attestations, multi-cluster failover, and a service mesh" is real, and you have taken the first half of it in this curriculum.
+
+Go book the exam.
