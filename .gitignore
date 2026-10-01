@@ -1,11 +1,16 @@
-node_modules
-dist
-dist-snapshot
-out
-.tmp
-segments
-images
+# Build and tool output. These are ANCHORED with a leading slash on purpose: a bare
+# `images` pattern matches at every depth, and it silently swallowed src/scenes/images/
+# and src/content/images/ — the whole images course — out of the first commit. The local
+# build was fine because the files were on disk; CI caught it on a fresh clone.
+/node_modules
+/dist
+/dist-snapshot
+/out
+/.tmp
+/segments
+/images
+/frames
+
 *.local
 .claude
 .DS_Store
-frames
