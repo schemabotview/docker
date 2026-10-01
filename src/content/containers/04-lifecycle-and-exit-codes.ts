@@ -1,0 +1,22 @@
+import type { Section } from '../types'
+
+export const lifecycleAndExitCodes: Section = {
+  id: 'lifecycle-and-exit-codes',
+  title: 'Lifecycle and exit codes',
+  scene: 'lifecycle-states',
+  slide: `## The state everyone forgets is \`exited\`
+
+A stopped container **still exists**. It keeps its writable layer, its config and its logs until you \`docker rm\` it — which is why \`docker ps -a\` is where disk hides.
+
+### The transitions
+\`create\` → **created** · \`start\` → **running** · \`pause\` → **paused** (cgroup freezer; memory still held) · \`stop\`/\`kill\`/pid 1 returns → **exited** · \`rm\` → gone.
+
+\`docker start\` goes back from **exited** to **running** — the container's config and writable layer are still there.
+
+### Read the exit code first
+- **0** finished normally · **125** the \`run\` command was wrong · **126** found but not executable · **127** not found
+- **137** = 128+9 = **SIGKILL** → memory, or \`stop\` timing out (§3)
+- **143** = 128+15 = SIGTERM it chose not to survive`,
+  narration:
+    "A container has five states, and four of the transitions between them are commands you type. But the state that costs people real money is the one that looks like an ending and isn't: exited. Walk the diagram. Docker create writes the container's specification and allocates its writable layer, and nothing runs. That's created — a real container, with an id, that has never executed anything. Docker start runs it: that's running, pid 1 alive. Docker pause is the unusual one. It freezes every process in the container using the cgroup freezer — they stop being scheduled, instantly, mid-instruction. But nothing is released. The memory is still allocated, the network connections are still open, the file descriptors are still held. It is a pause button, not a suspend to disk, and it is mostly useful when you want to stop a container competing for CPU without losing its state. Unpause and it resumes as if nothing happened. Then exited, which you reach three ways: docker stop, which is the SIGTERM-then-SIGKILL sequence from the last section; docker kill, which is SIGKILL straight away; or simply pid 1 returning of its own accord, which is the ordinary way a short-lived container ends. And here is the thing to internalise: a container in the exited state still exists. It has not been cleaned up. Its writable layer is still on disk with everything it wrote. Its logs are still there. Its configuration is still there. That is genuinely useful, because you can inspect a container after it died — read its logs, copy files out of it, look at why it failed. It is also why a busy machine quietly accumulates hundreds of dead containers holding gigabytes that docker images will never show you. Docker ps dash a is the first place to look when disk disappears. Docker rm is what actually frees it, and dash dash rm at run time does it automatically for containers you know are disposable. Docker start takes you backwards, from exited to running, and it works because nothing was destroyed — same writable layer, same config, same name. Now the exit code, which is the single most informative thing a dead container leaves behind, and most people never read it. Zero means the process finished normally. Anything from one to a hundred and twenty-five is your own program's exit code, so look in your application's logs. But a handful are Docker's own, and they are worth memorising. A hundred and twenty-five means the docker run command itself was malformed — the problem is in your flags, before the image name, not inside the container at all. A hundred and twenty-six means the command was found but could not be executed: usually a script without the executable bit, or a file that is not actually a binary. A hundred and twenty-seven means the command was not found in the image — a typo, or, very commonly, a shell that simply is not present because you are on a minimal base image. Then the two that come from signals, and they follow a rule: a process killed by signal N exits with 128 plus N. So a hundred and thirty-seven is 128 plus 9, which is SIGKILL. In practice that means one of two things: the OOM killer, because you hit the memory ceiling, or docker stop timing out after ten seconds — which is exactly the pid 1 bug from the last section. And a hundred and forty-three is 128 plus 15, SIGTERM, meaning it was asked politely to stop and chose to exit rather than handle it. Next: what happens automatically when a container exits, and the one word that decides what a host reboot does to it.",
+}

@@ -1,0 +1,16 @@
+/* Docker's design surface — the three tokens @graphlearning/shell leaves to the repo.
+   Imported AFTER the shell's stylesheet in main.tsx, so these win the cascade.
+
+   --brand is Docker Blue as of the 2024 rebrand (#1D63ED), not the older #2496ED. That matters
+   here for a reason beyond fidelity: the catalog already carries four blues — python #4b8bbe,
+   data-warehousing #5b8cff, snowflake #29b5e8, azure #3aa0ff — and #2496ED sits between the last
+   two. #1D63ED is deeper and more saturated than all four, so the card is still recognisably
+   Docker and still tells itself apart at thumbnail size.
+
+   --accent-2 colours the slide's `###` subheadings only. A warm amber against the deep blue is the
+   readable pairing; a cyan would be more whale-ish and would collide with three existing accents. */
+:root {
+  --brand: #1d63ed; /* Docker Blue (2024) — the whale */
+  --brand-hover: #4d85f2; /* lighter blue — the eyebrow's hover state */
+  --accent-2: #ffc857; /* amber — the slide's `###` subheading */
+}

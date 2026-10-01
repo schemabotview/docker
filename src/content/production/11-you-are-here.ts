@@ -1,0 +1,23 @@
+import type { Section } from '../types'
+
+export const youAreHere: Section = {
+  id: 'you-are-here',
+  title: 'You are here',
+  scene: 'disk-map',
+  slide: `## The disk is the incident that actually happens
+
+The diagram is §6's, because that's the one you'll meet.
+
+- **§1–3** — three of the best settings live in \`daemon.json\`, which nobody edits. **Log rotation is the two most valuable lines here**; \`live-restore\` makes a daemon upgrade a non-event
+- **§4** — \`runc\` is replaceable. \`gVisor\` and Kata are the dial for running **other people's code**
+- **§5** — \`docker events --since\` answers "what happened at 3am", which is otherwise nearly unanswerable
+- **§6** — four places the bytes go, and \`docker images\` shows one. Builder cache first, **volumes last**
+- **§7** — check the disk and the context, then split daemon / container / build / network. **Exit code before logs**
+- **§8–9** — CI is cold every time, and \`dind\` wants \`--privileged\`. Rootless builder instead
+- **§10** — Compose on one host is fine. Swarm for two or three. Then Kubernetes
+
+### Next
+Course 12: one real application, containerised end to end.`,
+  narration:
+    "Let's close the loop, and the diagram is section six's, because the disk filling up is the incident that actually happens, and everything else in this course is either preventing it or diagnosing something else. Sections one through three were daemon dot json, the file that on most hosts has never been opened, and which holds three of the most valuable settings in Docker. Log rotation — max-size and max-file — is the two most valuable lines in this course, because the default json-file driver does not rotate, and a chatty container filling the disk takes the whole host with it. Live-restore turns a daemon upgrade from an outage into a non-event, because the shims own the container processes, not the daemon. And default-address-pools is the one that prevents a bizarre, unattributable networking incident when Docker's default range collides with your corporate network. Apply, then always confirm with docker info, because a JSON syntax error means the daemon refuses to start on the next reboot. Section two said overlay2 and don't change it, and gave you the vocabulary to date old advice: devicemapper means pre-2017. Section four went under Docker to the runtime layer. Runc is replaceable because it's a specification — crun for speed, gVisor for syscalls served in userspace, Kata for a real VM per container. And that's the dial for the case course ten flagged: running other people's code, where the shared kernel is genuinely the wrong trade. It's also the Kubernetes seam: dropping dockerd kept exactly that half. Section five was observability, and the underused tool is docker events with dash dash since, which answers what happened to this container at three in the morning — a question that's otherwise nearly unanswerable after the fact. Alert on disk, on restart counts, on unhealthy events, and on OOM kills. Section six was the disk map: four places the bytes go and docker images shows you one, which is why deleting images frees nothing. Builder cache first because it's the safest large win, containers next, volumes last and read the list. And make it boring with a scheduled prune, so nobody makes that decision at two in the morning. Section seven was the playbook: check the disk and the context before anything, then separate daemon, container, build and network — and read the exit code before the logs, because it's often the whole answer. Sections eight and nine were the pipeline and the desk. CI runners are cold every time, so remote cache with mode equals max; and Docker-in-Docker wants privileged, which on a shared runner is root on the host, so use a rootless builder instead. Devcontainers move the toolchain into a container too, which fixes works-on-my-machine for the linter and the compiler rather than for the app. And section ten was the honest decision about more than one host: Compose on one is fine, Swarm for two or three with a small team, Kubernetes beyond that — and every concept transfers. So: eleven courses. You can build an image properly, run it safely, keep its data, connect it, compose a stack, distribute it, harden it, and operate the machine it runs on. What's left is to do all of it at once, on something real. Course twelve is a capstone: one multi-service application, containerised from a naive first attempt through to something small, hardened, multi-architecture and built in CI — measuring at each step, so you can see what each decision actually bought.",
+}

@@ -1,0 +1,22 @@
+import type { Section } from '../types'
+
+export const dnsAndResolution: Section = {
+  id: 'dns-and-resolution',
+  title: 'DNS and resolution',
+  scene: 'dns-inside',
+  slide: `## \`nameserver 127.0.0.11\`
+
+Docker writes the container's \`/etc/resolv.conf\` and points it at an **embedded resolver** in that container's namespace. It answers for container names on the network; everything else it **forwards** to the host's resolvers.
+
+That address looks alarming in \`resolv.conf\` and is entirely normal — it exists only inside that namespace.
+
+### Three real surprises
+- **The host's resolvers are inherited.** So a container resolving an internal name works on the VPN and fails in CI — with an error about *your* DNS, not Docker's
+- **A search domain guesses.** If the host has \`search corp.example\`, looking up \`db\` may try \`db.corp.example\` first — slow failures, and occasionally a *wrong answer* from a wildcard record
+- **\`--dns\` overrides it**, per container or in \`daemon.json\` for all of them
+
+### Debugging it
+\`getent hosts db\` from inside — that's the resolver path your app actually uses. \`dig\` may bypass it.`,
+  narration:
+    "When something inside a container looks up a name, here's the path. Your application calls getaddrinfo — an ordinary libc call, nothing Docker-aware about it. Libc reads slash etc slash resolv dot conf, which Docker wrote when the container was created, and which says nameserver 127 dot 0 dot 0 dot 11. That address is Docker's embedded resolver, listening inside this container's network namespace. Remember from section one that each container has its own loopback, so 127 dot 0 dot 0 dot 11 is not a service on your host and not shared between containers — it's reachable only from inside this one. People find that address in resolv dot conf, search for it, and conclude something is misconfigured. It's normal, and it's the thing making container names work. The resolver has two jobs. If the name is a container on a network this container is attached to — or a network alias — it answers from its own table. Otherwise it forwards the query to the resolvers the host was using at the time the container started. Which brings us to the three surprises. The first is that inherited-resolvers behaviour, and it's the cause of a classic works-on-my-machine. On your laptop you're connected to the company VPN, so your host's resolvers are the corporate ones, so your container can resolve internal names, so your application works. In CI, the runner has no VPN, inherits public resolvers, and the same container cannot resolve the same name. The error you get is a DNS failure that mentions your name server, not Docker, so nobody thinks to look here. It's also why restarting Docker after connecting to a VPN sometimes fixes things people can't explain: new containers pick up the new resolvers. The second is search domains. If your host's resolv dot conf has a search line, containers inherit it, and libc will append each search domain to an unqualified name before trying it bare. So a lookup for db may go out as db dot corp dot example first. Usually that just fails and then the right answer is tried, costing you a round trip on every lookup — which is invisible until you're doing thousands a second. Occasionally it's worse: if your organisation has a wildcard DNS record, db dot corp dot example resolves to something, and your container connects confidently to entirely the wrong host. That one is genuinely hard to debug because everything reports success. The third is that you can override it. Dash dash dns on docker run sets the resolvers for one container; the dns key in daemon dot json sets the default for all of them. Dash dash dns-search does the same for search domains, and setting it to a single dot disables searching entirely, which is a good idea in a container that only ever uses fully-qualified names. One debugging note that saves time. Use getent hosts, not dig or nslookup, when you're testing resolution from inside a container. Getent goes through libc — the same path your application uses, honouring resolv dot conf and nsswitch. Dig talks to a name server directly and can bypass exactly the configuration you're trying to test, so it can succeed while your application fails, or the reverse. And on a minimal image none of the three exist, in which case join the namespace with netshoot, as in course two. Next: attaching a running container to a second network.",
+}

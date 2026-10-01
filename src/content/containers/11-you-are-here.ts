@@ -1,0 +1,23 @@
+import type { Section } from '../types'
+
+export const youAreHere: Section = {
+  id: 'you-are-here',
+  title: 'You are here',
+  scene: 'lifecycle-states',
+  slide: `## Every command in this course is a move on this diagram
+
+- **§1–2** — \`run\` is **create + start**, and the image name is where Docker stops reading
+- **§3** — the arrival at \`exited\` is **SIGTERM, 10 s, SIGKILL**. Exec form or your app never hears it
+- **§4** — \`exited\` is a *state*, not a deletion. The exit code is the first thing to read
+- **§5** — what happens automatically on the way back, and \`unless-stopped\` vs \`always\`
+- **§6–7** — the ceiling and the config, both fixed at **create** time
+- **§8–10** — reading a container while it runs, and getting things out after it stops
+
+### You can now
+Diagnose the two silent failures: **exit 137** (memory, or \`stop\` timing out) and a **throttled** container that looks healthy. Read \`docker inspect\` one field at a time. Debug an image with no shell.
+
+### You can't yet
+Everything so far has been **someone else's image**. Course 3 opens one up; course 4 builds one.`,
+  narration:
+    "Let's close the loop, and the diagram is section four's because every command in this course is a transition on it. Section one gave us the grammar. Docker run is create plus start, and the image name is a boundary: flags before it configure the container and Docker reads them, arguments after it are argv for your process and Docker does not. Which is why docker run alpine dash i t is not interactive and never will be. Section two took apart the wiring. Attached means your terminal is connected and Ctrl-C signals pid 1. Dash d detaches and sends the output to the log driver instead. Dash i keeps stdin open, dash t allocates a terminal so programs believe a human is watching, and the reason a detached shell exits in forty milliseconds is that it read EOF on a stdin nobody connected. Section three was the highest-value idea here. Reaching the exited state through docker stop is three things — SIGTERM, ten seconds, SIGKILL — and whether those ten seconds are usable depends on who is pid 1. Shell form puts slash bin slash sh there, which ignores the signal and forwards nothing; exec form puts your process there, which can handle it. A service that takes exactly ten seconds to stop, every time, is that bug and nothing else. Section four made exited a first-class state rather than an ending: the container still exists, still holds its writable layer, still holds its logs, until you remove it. And it leaves behind an exit code that is the first thing worth reading — a hundred and twenty-five for a bad run command, a hundred and twenty-seven for a command that isn't in the image, a hundred and thirty-seven for SIGKILL, which means memory or a stop that timed out. Section five was what happens automatically on the way back from exited, and the column that actually matters: what a host reboot does. Always brings a container back even if you deliberately stopped it; unless-stopped remembers. And the backoff means a crash-looping container looks almost alive in docker ps, so read the status text. Sections six and seven were the two things fixed at create time. The limits, which are course one's cgroup files with flags in front of them — memory kills, CPU throttles silently, and unset means unlimited. And the environment, four sources deep, where the last one wins, dash dash env-file is not a shell script, and everything is visible to anyone who can read docker inspect. Sections eight, nine and ten were about seeing in. Write to stdout, because the driver owns everything after that, and set log rotation before a chatty container fills a host. Exec is a new process joined to existing namespaces, which explains why it can't work on a stopped container and why a distroless image has nothing for it to run. And docker cp gets evidence out of a dead container, while docker commit produces an image nobody can reproduce or audit. So what can you do now? You can diagnose the two failures that are silent by design — the container killed for memory, and the container throttled to a crawl while every health check passes. You can pull one field out of docker inspect instead of drowning in JSON. You can debug an image that has no shell in it. And you can look at a stopped container and know what to read first. What you cannot do yet is build anything. Every image in these two courses has been somebody else's. So next, course three opens an image up — manifests, layers, digests, and why a tag is a promise nobody has to keep — and course four is where you write your first Dockerfile.",
+}

@@ -1,0 +1,24 @@
+import type { Section } from '../types'
+
+export const youAreHere: Section = {
+  id: 'you-are-here',
+  title: 'You are here',
+  scene: 'build-loop',
+  slide: `## Every rule was the loop
+
+The diagram is §1's. Container → run → commit → discard, once per instruction.
+
+- **§2 \`FROM\`** — the first line sets size, attack surface and debuggability. Alpine is a *different libc*
+- **§3 \`RUN\`** — one layer each. Split \`apt-get\` and the stale index bites you weeks later
+- **§4–5** — \`COPY\` over \`ADD\`; the \`.\` is **uploaded**, so \`.dockerignore\` is a speed tool
+- **§6 \`WORKDIR\`** — because \`RUN cd\` runs in a container that's thrown away
+- **§7 \`ARG\`/\`ENV\`** — build time vs run time. \`ARG\` is **not** a secret mechanism
+- **§8–9** — \`USER\` is the highest-value line; \`EXPOSE\` publishes nothing; Docker ignores *unhealthy*
+- **§10 \`ENTRYPOINT\`/\`CMD\`** — the command and its default args. **Exec form, always**
+- **§11 the cache** — a miss cascades. Manifest first, source last
+
+### You can't yet
+Run two stages in parallel, mount a cache, pass a secret, or build for two architectures. **Course 5.**`,
+  narration:
+    "Let's close the loop, and the diagram is section one's because every rule in this course was a consequence of it. A build is not a script — it is a loop that runs once per instruction: start a throwaway container on the layers so far, run the instruction, commit the filesystem difference as a layer, discard the container. Section two was the first line. FROM decides size, attack surface and whether you can debug the thing. Slim is the sane default; Alpine is not a smaller Debian but a different C library, and adopting it is a decision you verify rather than a default you inherit; distroless and scratch trade the shell for a much smaller attack surface, and the missing shell is the feature, not a bug. And pin it, because a floating base tag means your rebuild is a different build. Section three was RUN, where essentially all of your size comes from. One layer per RUN, so the chains of double-ampersands are structural rather than stylistic. And the apt-get split is not untidy, it is a correctness bug on a delay: the update layer caches forever while the install line re-runs, and weeks later you get a 404 on a package that exists. Sections four and five were getting files in. COPY does one predictable thing; ADD also extracts local tarballs and fetches URLs without verifying them, so prefer COPY and do URLs with a RUN that checks a checksum. And the dot at the end of docker build is a directory that gets uploaded, which is why COPY can't escape it, why your dot-env reaches the daemon, and why dot-dockerignore is a build-speed tool you write on day one. Section six was WORKDIR, and the reason it exists: RUN cd happens in a container that is immediately discarded, so it does nothing, silently. Plus the trailing-slash rule, which changes whether a destination is a file or a directory with no error either way. Section seven was two variables at two different times. ARG lives during the build; ENV lives in the image and in the running process. And ARG is not a secret mechanism — the value is in the build history in plain text for anyone who can pull the image, and the fix is a BuildKit secret mount, next course. Sections eight and nine were the zero-byte instructions. EXPOSE publishes nothing and is worth writing anyway. USER with a numeric uid is the highest-value line in the file. STOPSIGNAL pairs with the pid 1 material. VOLUME is stickier than it looks and usually belongs at run time instead. And HEALTHCHECK produces a state that Docker itself ignores entirely — no restart, no traffic change — but that Compose, orchestrators and your scripts all read, and start-period is the option you must not omit. Section ten collapsed four cases into one rule: ENTRYPOINT is the command, CMD is its default arguments, and what you type after the image name replaces CMD. Exec form always, because shell form puts slash bin slash sh at pid 1 and your ten-second graceful shutdown never happens. And an entrypoint script ending in exec dollar-at when you need setup first. Section eleven was the cache, and the cascade: one miss invalidates everything below, which makes Dockerfile authoring an ordering problem. Manifest first, install, source last. And RUN's input is the command string alone, which is why apt-get upgrade is a cache hit forever and never upgrades anything. So what can you do now? You can write a Dockerfile that builds a correct, reasonably small image, runs as a non-root user, shuts down cleanly, and rebuilds in seconds. What you cannot do yet is run two stages at the same time, keep a package cache across builds, pass a secret without leaking it, or produce one image that runs on both ARM and x86. All four of those are the same tool, and it is already the builder you have been using without noticing. Course five is BuildKit.",
+}
