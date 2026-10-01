@@ -23,10 +23,19 @@ any of them**; they were read once, for coverage:
 | `schemabotview/docker-ct` | a 10×10 content repo for the old `graphl-movie` runtime |
 | `schemabotview/docker-content` | graphl-ux era: 10 courses / ~140 sections — the coverage baseline |
 
-**Not a git repo yet, and the publish name is undecided**: `schemabotview/docker` is taken by its
-own quarry. Java hit the same collision on 2026-09-30 and resolved it by bundling to `~/.archive/`
-and deleting; the same move is recommended here but has NOT been authorised. The alternative is
-`schemabotview/docker-app`, which breaks the one-name-per-concept convention every other repo keeps.
+**Published at `schemabotview/docker`, live at `graphl.in/docker/`** (2026-10-01). The name
+collision was resolved the way java resolved its own the day before: `schemabotview/docker` (the
+10-notebook quarry) and `schemabotview/docker-ct` (the 10×10 `graphl-movie` repo) were
+mirror-cloned, bundled to `~/.archive/docker-2026-10-01.bundle` and
+`~/.archive/docker-ct-2026-10-01.bundle`, `git bundle verify`d as complete histories with their
+HEAD SHAs cross-checked against GitHub, then **deleted**. `schemabotview/docker-content` still
+exists and is unused.
+
+**The gitignore trap, recorded because it nearly shipped**: the scaffold inherited a bare `images`
+pattern (meant for a build output dir), which matches at EVERY depth — so `src/scenes/images/` and
+`src/content/images/`, the whole images course, were silently excluded from the first commit. The
+local build was fine because the files are on disk; CI caught it on a fresh clone. All output
+patterns are now anchored with a leading slash. Worth checking in any repo scaffolded from this one.
 
 ## Scope
 

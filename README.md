@@ -21,8 +21,9 @@ file, how BuildKit runs two stages at once — and the places Docker expertise i
 sections of their own. `project` is the capstone: one real multi-service app containerised end to
 end. The full plan is [`../DOCKER-PLAN.md`](../DOCKER-PLAN.md).
 
-**All 12 courses are authored and verified: 130 sections, 85 scenes.** No narration wavs yet —
-that's the Colab step.
+**All 12 courses are authored and verified: 130 sections, 85 scenes.** Live at
+**[graphl.in/docker/](https://graphl.in/docker/)**. No narration wavs yet — that's the Colab step,
+so every section 404s its audio until then.
 
 ## Run it
 
